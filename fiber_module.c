@@ -1,11 +1,9 @@
 #include <linux/module.h>
 #include <linux/kernel.h>	//needed for printk() priorities
-#include <linux/device.h> //needed for creating device class and device under /dev
-#include <linux/cdev.h>
+#include <linux/device.h>	//needed for creating device class and device under /dev
+#include <linux/cdev.h>		//needed for cdev_alloc()
 #include "headers/fiber_module.h"	//for macros and function declarations
 #include "headers/ioctl.h"
-
-#define AUTHOR "Carmine Mansueto"
 
 static struct cdev* fib_cdev;
 static struct class* fib_cdevclass;
@@ -15,11 +13,17 @@ static dev_t fib_cdevt;			//for the return of alloc_chrdev_region. This will con
 //file operations for the device
 const struct file_operations fops = {
 	.owner = THIS_MODULE,
-	//.open = my_open;
-	.unlocked_ioctl = ioctl_commands // function that is now called instead of ioctl(), this handles the ioctl commands when Userspace calls ioctl()
-																		// it is a function pointer to long (*unlocked_ioctl) (struct file* filp, unsigned int cmd, unsigned long arg);
-																		// indeed ioctl_commands is a function which reflects the firm of unlocked_ioctl
+	.open = dev_open,
+	.unlocked_ioctl = ioctl_commands	// function that is now called instead of ioctl(), this handles the ioctl commands when Userspace calls ioctl()
+										// it is a function pointer to long (*unlocked_ioctl) (struct file* filp, unsigned int cmd, unsigned long arg);
+										// indeed ioctl_commands is a function which reflects the firm of unlocked_ioctl
 };
+
+int dev_open(struct inode* i, struct file* f){
+
+	printk(KERN_INFO "Device opened correctly!\n");
+	return 0;
+}
 
 long ioctl_commands(struct file* filp, unsigned int cmd, unsigned long arg){
 
@@ -34,6 +38,13 @@ long ioctl_commands(struct file* filp, unsigned int cmd, unsigned long arg){
 	}
 
 	return 0;
+}
+
+//Permissions to open the device from Userspace
+static char *set_permission(struct device *dev, umode_t *mode){
+	if (mode)	//can be NULL
+		*mode = 0666; /* set Read and Write and No-Exec permissions TO ROOT/GROUP/USER */
+	return NULL; /* could override /dev name here too */
 }
 
 static int __init mod_init(void){
@@ -78,6 +89,9 @@ static int __init mod_init(void){
 		class_destroy(fib_cdevclass);
 		return -EFAULT;
 	}
+	
+	//Setting the device permissions to open it from Userspace
+	fib_cdevclass -> devnode = set_permission;
 
 	fib_dev = device_create(fib_cdevclass, NULL, fib_cdevt, NULL, DEVICE_NAME);
 	if(IS_ERR(fib_dev)){
@@ -93,14 +107,17 @@ static int __init mod_init(void){
 static void __exit mod_exit(void){
 
 	printk(KERN_INFO "Removing module...\n");
+	
 	//Cleaning up all the stuff this module allocated
 	device_destroy(fib_cdevclass, fib_cdevt);
+	class_unregister(fib_cdevclass);
 	class_destroy(fib_cdevclass);
 	cdev_del(fib_cdev);
 	unregister_chrdev_region(fib_cdevt, 1);
 }
 
 
+#define AUTHOR "Carmine Mansueto 1646454"
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR(AUTHOR);
 
