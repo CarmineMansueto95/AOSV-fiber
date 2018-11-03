@@ -2,6 +2,7 @@
 #include <linux/kernel.h>	//needed for printk() priorities
 #include <linux/device.h>	//needed for creating device class and device under /dev
 #include <linux/cdev.h>		//needed for cdev_alloc()
+
 #include "headers/fiber_module.h"	//for macros and function declarations
 #include "headers/ioctl.h"
 
@@ -55,21 +56,21 @@ static int __init mod_init(void){
 
 	//Allocating device MAJOR number and first MINOR number
 	//The first parameter will contain, after the execution, the MAJOR and the first MINOR
-	ret = alloc_chrdev_region(&fib_cdevt, 0, NUM_MINORS, DEVICE_NAME);
+	ret = alloc_chrdev_region(&fib_cdevt, START_MINOR, NUM_MINORS, DEVICE_NAME);
 	if(ret!=0){
 		printk(KERN_INFO "Could not allocate MAJOR and MINOR!\n");
 		return -EFAULT;
 	}
-	printk("The MAJOR number of the device is %d\n", MAJOR(fib_cdevt));
+	printk("The MAJOR number of the device is %d and the MINOR number is %d\n", MAJOR(fib_cdevt), MINOR(fib_cdevt));
 
-	//Allocating  a struct cdev for the device
+	//Allocating a struct cdev for the device
 	fib_cdev = cdev_alloc();
 	if(!fib_cdev){
 		printk(KERN_INFO "cdev_alloc() failed: could not allocate memory for the cdev struct!\n");
 		return -EFAULT;
 	}
 
-	//Filling the struct cdev with the fops structure
+	//Filling the struct cdev with the fops structure (could also be done manually)
 	cdev_init(fib_cdev, &fops);
 
 	//Registering device into the system (informing the kernel about our cdev structure)
@@ -79,8 +80,12 @@ static int __init mod_init(void){
 		cdev_del(fib_cdev);
 	}
 
-
-	//Creating the devide under /dev by means of the udev daemon
+	/*
+	 * Creating the devide under /dev by means of the udev daemon
+	 * This means to assign to our device a CLASSNAME and a DEVICENAME
+	 * so that it will be added into /sys in such a way that udev reads
+	 * it and makes it to compare in /dev
+	 */
 
 	fib_cdevclass = class_create(THIS_MODULE, CLASS_NAME);
 	if(IS_ERR(fib_cdevclass)){
@@ -113,7 +118,7 @@ static void __exit mod_exit(void){
 	class_unregister(fib_cdevclass);
 	class_destroy(fib_cdevclass);
 	cdev_del(fib_cdev);
-	unregister_chrdev_region(fib_cdevt, 1);
+	unregister_chrdev_region(fib_cdevt, NUM_MINORS);
 }
 
 
@@ -123,3 +128,8 @@ MODULE_AUTHOR(AUTHOR);
 
 module_init(mod_init);
 module_exit(mod_exit);
+
+/*
+ * kretprobe example
+ * https://github.com/spotify/linux/blob/master/samples/kprobes/kretprobe_example.c
+ */
