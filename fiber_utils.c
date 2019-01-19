@@ -10,6 +10,8 @@
 #include <linux/uaccess.h>			// needed for copy_to_user()
 #include <linux/slab.h>				// needed for kmalloc() and kfree()
 #include <linux/hashtable.h>
+#include <linux/spinlock.h>
+#include <asm/fpu/internal.h>
 
 #include "headers/fiber_utils.h"	// for macros and function declarations
 #include "headers/ioctl.h"
@@ -93,10 +95,16 @@ int convert_thread(unsigned int* arg){
 			memcpy(fib_ctx->regs, task_pt_regs(current), sizeof (struct pt_regs));
 			fib_ctx->fpu=NULL;
 			
+			fib_ctx->fpu = kmalloc(sizeof(struct fpu), GFP_KERNEL);
+			copy_fxregs_to_kernel(fib_ctx->fpu); // initializing the FPU of the fiber with the one of current
+			
 			//assigning id to the fiber atomically
 			smp_mb();
 			fib_ctx->fiber_id = (unsigned int) atomic_inc_return(&fiber_ctr);	//atomic_inc_return increments by 1 the atomic counter and returns the value of the counter as int, so I cast to unsigned int
 			smp_mb();
+			
+			fib_ctx->thread = current_pid;
+			spin_lock_init(&fib_ctx->lock);
 			
 			printk(KERN_INFO "Thread succesfully converted into Fiber, fiber_id=%u\n", fib_ctx->fiber_id);
 			
@@ -155,10 +163,16 @@ int convert_thread(unsigned int* arg){
 	memcpy(fib_ctx->regs, task_pt_regs(current), sizeof (struct pt_regs));
 	fib_ctx->fpu=NULL;
 	
+	fib_ctx->fpu = kmalloc(sizeof(struct fpu), GFP_KERNEL);
+	copy_fxregs_to_kernel(fib_ctx->fpu); // initializing the FPU of the fiber with the one of current
+	
 	//assigning id to the fiber atomically
 	smp_mb();
 	fib_ctx->fiber_id = (unsigned int) atomic_inc_return(&fiber_ctr);	//atomic_inc_return increments by 1 the atomic counter and returns the value of the counter as int, so I cast to unsigned int
 	smp_mb();
+	
+	fib_ctx->thread = current_pid;
+	spin_lock_init(&fib_ctx->lock);
 	
 	printk(KERN_INFO "Thread succesfully converted into Fiber, fiber_id=%u\n", fib_ctx->fiber_id);
 
@@ -224,11 +238,17 @@ int create_fiber(fiber_arg* my_arg){
 					fib_ctx->regs->sp = (unsigned long)my_arg->stack;
 					fib_ctx->regs->bp = (unsigned long)my_arg->stack;
 					fib_ctx->regs->ip = (unsigned long)my_arg->func;
+					fib_ctx->regs->di = (unsigned long)my_arg->params;
 					fib_ctx->fpu = NULL;
+					
+					fib_ctx->fpu = kmalloc(sizeof(struct fpu), GFP_KERNEL); // I have not to initialize it, a new fiber has to have an empty FPU
 					
 					smp_mb();
 					fib_ctx->fiber_id = atomic_inc_return(&fiber_ctr);
 					smp_mb();
+					
+					fib_ctx->thread = 0;	// a new fiber is free, no threads are running it
+					spin_lock_init(&fib_ctx->lock);
 					
 					// adding the fiber to the hashtable of fibers of process
 					hash_add_rcu(tmp->fibers, &(fib_ctx->node), fib_ctx->fiber_id);
@@ -247,4 +267,79 @@ int create_fiber(fiber_arg* my_arg){
 	printk(KERN_INFO "create_fiber not allowed. Thread did never call convert_thread!\n");
 	return -1;
 	
+}
+
+int switch_to(unsigned int target_fib){
+	
+	struct process_t* tmp;
+	struct thread_t* tmp2;
+	struct fiber_context_t* tmp3;
+	struct fiber_context_t* old_fiber;
+	
+	struct pt_regs* current_regs;
+	
+	pid_t current_pid;		// thread id of the thread that called convert_thread
+	pid_t current_tgid;		// process id of the thread that called convert_thread
+	
+	current_pid = current->pid;
+	current_tgid = current->tgid;
+	
+	current_regs = task_pt_regs(current);
+	
+	// going to check if the "current" thread called "convert_thread" at least once, otherwise it cannot do switch_to!
+	hash_for_each_possible_rcu(processes, tmp, node, current_tgid) {
+		if(tmp->process_id == current_tgid){
+			// I found the entry in the hashtable corresponding to the process of current thread
+			// I have to check if there is the struct thread corresponding to the current thread in its "threads" hashtable
+			hash_for_each_possible_rcu(tmp->threads, tmp2, node, current_pid) {
+				if(tmp2->thread_id == current_pid){
+					// I found it! "current" already called convert_thread, so it is already a fiber.
+					
+					old_fiber = tmp2->selected_fiber;
+					
+					//Going to check if the target fiber exists within the fibers of the current process
+					hash_for_each_possible_rcu(tmp->fibers, tmp3, node, target_fib) {
+						if(tmp3->fiber_id == target_fib){
+							// The fiber I want to switch to exists! It is tmp3
+							
+							if(!spin_trylock(&tmp3->lock)){
+								printk(KERN_INFO "could not acquire lock of target fiber! Some other is trying to acquire it!");
+								return -1;
+							}
+							if(tmp3->thread != 0){
+								printk(KERN_INFO "the fiber is occupied by another thread!");
+								return -1;
+							}
+							
+							// If i am here, I can steal the fiber
+							tmp3->thread = current_pid;
+							
+							spin_unlock(&tmp3->lock);
+							
+							// saving the state of the current thread into the old fiber
+							spin_lock(&old_fiber->lock);
+							old_fiber->thread = 0;	// now the old fiber is free
+							memcpy(old_fiber->regs, current_regs, sizeof(struct pt_regs));
+							copy_fxregs_to_kernel(old_fiber->fpu); // saving the FPU into the old fiber
+							spin_unlock(&old_fiber->lock);
+							
+							// storing the state of the target fiber into the current thread
+							tmp2->selected_fiber = tmp3;
+							memcpy(current_regs, tmp3->regs, sizeof(struct pt_regs));
+							copy_kernel_to_fxregs(&(tmp3->fpu->state.fxsave));
+							return 0;
+						
+						}
+					}
+
+					printk(KERN_INFO "The target fiber does not exist!\n");
+					return -1;
+				}
+
+			}
+		}
+	}
+	
+	printk(KERN_INFO "The current thread never called convert_thread! Cannot do switch_to!\n");
+	return -1;				
 }

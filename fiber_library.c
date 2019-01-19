@@ -27,7 +27,7 @@ unsigned int ConvertThreadToFiber(){
 	return fib_id;
 }
 
-unsigned int CreateFiber(ssize_t stack_size, void* func, void* param){
+unsigned int CreateFiber(ssize_t stack_size, void* func, void* params){
 	int ret;
 	int fd;
 	
@@ -35,7 +35,7 @@ unsigned int CreateFiber(ssize_t stack_size, void* func, void* param){
 	
 	fiber_arg my_arg;
 	my_arg.func = func;
-	my_arg.arg = param;
+	my_arg.params = params;
 	
 	void* stack = memalign(16,stack_size); // the stack must be 16 byte aligned
 	/*
@@ -56,4 +56,23 @@ unsigned int CreateFiber(ssize_t stack_size, void* func, void* param){
 
 	printf("Create Fiber success!\n");
 	return fib_id;
+}
+
+int SwitchTo(unsigned int fiber_id){
+	int ret;
+	int fd;
+	
+	unsigned int f_id = fiber_id;
+	
+	fd = open(DEV_NAME, O_RDWR);
+	
+	ret = ioctl(fd, IOCTL_SWITCH_TO, &f_id);
+	
+	if(ret){
+		printf("SwitchTo failed!\n");
+		return -1;
+	}
+	
+	printf("SwitchTo success!\n");
+	return 0;
 }

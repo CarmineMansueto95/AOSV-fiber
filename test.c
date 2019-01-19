@@ -14,6 +14,7 @@
 void foo(){
 	while(1){
 		printf("in foo function!\n");
+		sleep(2);
 	}
 }
 
@@ -37,6 +38,8 @@ int main(){
 	}
 	
 	printf("Create Fiber success! The fiber id is %u\n", fib_id2);
+	
+	SwitchTo(fib_id2);
 	
 	return 0;
 }

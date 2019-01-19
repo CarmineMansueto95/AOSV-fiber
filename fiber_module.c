@@ -48,6 +48,8 @@ long ioctl_commands(struct file* filp, unsigned int cmd, unsigned long arg){
 	
 	fiber_arg my_arg;
 	
+	unsigned int switchto_fib_id;
+	
 	// going to parse the passed command
 	switch(cmd){
 		
@@ -77,7 +79,18 @@ long ioctl_commands(struct file* filp, unsigned int cmd, unsigned long arg){
 			
 			printk(KERN_INFO "create_fiber success!\n");
 			break;
-
+		
+		case IOCTL_SWITCH_TO:
+			printk(KERN_INFO "ioctl issued with IOCTL_SWITCH_TO command!\n");
+			copy_from_user(&switchto_fib_id, (const unsigned int*) arg, sizeof(unsigned int));
+			ret = switch_to(switchto_fib_id);
+			if(ret != 0){
+				printk(KERN_INFO "switch_to failed!\n");
+				return -1;
+			}
+			printk(KERN_INFO "switch_to success!\n");
+			break;
+		
 		default:
 			printk(KERN_INFO "Wrong command!!!\n");
 			return -1;

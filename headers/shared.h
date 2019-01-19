@@ -4,6 +4,6 @@
 typedef struct fiber_arg_t{
     void* func;
     void* stack;
-    void* arg;
+    void* params;
     unsigned int ret;
 }fiber_arg;

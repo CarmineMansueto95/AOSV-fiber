@@ -9,3 +9,4 @@ int dev_open (struct inode* i, struct file* f);
 long ioctl_commands(struct file* filp, unsigned int cmd, unsigned long arg);
 extern int convert_thread(unsigned int* arg);
 extern int create_fiber(fiber_arg* my_arg);
+extern int switch_to(unsigned int target_fib);

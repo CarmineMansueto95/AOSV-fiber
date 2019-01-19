@@ -1,9 +1,11 @@
 #include "shared.h"
 
 typedef struct fiber_context_t{
-	unsigned int fiber_id;		// id of the fiber, an unsigned integer
+	unsigned int fiber_id;	// id of the fiber, an unsigned integer
 	struct pt_regs* regs;	// status of the main registers
-	void* fpu;			// status of the floating point unit
+	struct fpu* fpu;		// status of the floating point unit
+	pid_t thread;			// pid of the thread running the fiber
+	spinlock_t lock;
 	struct hlist_node node;
 }fiber_context_t;
 
@@ -24,3 +26,4 @@ typedef struct thread_t{
 
 int convert_thread(unsigned int* arg);
 int create_fiber(fiber_arg* my_arg);
+int switch_to(unsigned int target_fib);
