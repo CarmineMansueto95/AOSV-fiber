@@ -4,8 +4,8 @@
 
 #define IOCTL_TEST _IO(IOCTL_LETTER, 0)
 
-#define IOCTL_CONVERT_THREAD _IOR(IOCTL_LETTER, 1, unsigned int*)
+#define IOCTL_CONVERT_THREAD _IOR(IOCTL_LETTER, 1, pid_t*)
 
 #define IOCTL_CREATE_FIBER _IOWR(IOCTL_LETTER, 2, void*)
 
-#define IOCTL_SWITCH_TO _IOW(IOCTL_LETTER, 3, unsigned int*)
+#define IOCTL_SWITCH_TO _IOW(IOCTL_LETTER, 3, pid_t*)

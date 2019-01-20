@@ -12,9 +12,9 @@
 
 #define DEV_NAME "/dev/fiber"
 
-unsigned int ConvertThreadToFiber(){
+pid_t ConvertThreadToFiber(){
 	int ret;
-	unsigned int fib_id;
+	pid_t fib_id;
 	int fd;
 	
 	fd = open(DEV_NAME, O_RDWR);
@@ -27,13 +27,16 @@ unsigned int ConvertThreadToFiber(){
 	return fib_id;
 }
 
-unsigned int CreateFiber(ssize_t stack_size, void* func, void* params){
+pid_t CreateFiber(ssize_t stack_size, void* func, void* params){
+	
 	int ret;
 	int fd;
+	pid_t fib_id;
+	
+	fiber_arg my_arg;
 	
 	fd = open(DEV_NAME, O_RDWR);
 	
-	fiber_arg my_arg;
 	my_arg.func = func;
 	my_arg.params = params;
 	
@@ -47,32 +50,27 @@ unsigned int CreateFiber(ssize_t stack_size, void* func, void* params){
 	
 	ret = ioctl(fd, IOCTL_CREATE_FIBER, &my_arg);
 	
-	unsigned int fib_id = my_arg.ret;
+	fib_id = my_arg.ret;
 	
-	if (ret || fib_id==0){
-		printf("Create Fiber failed!\n");
+	if (ret || fib_id==0)
 		return 0;
-	}
 
-	printf("Create Fiber success!\n");
 	return fib_id;
 }
 
-int SwitchTo(unsigned int fiber_id){
+int SwitchTo(pid_t fiber_id){
 	int ret;
 	int fd;
+	pid_t f_id;
 	
-	unsigned int f_id = fiber_id;
+	f_id = fiber_id;
 	
 	fd = open(DEV_NAME, O_RDWR);
 	
 	ret = ioctl(fd, IOCTL_SWITCH_TO, &f_id);
 	
-	if(ret){
-		printf("SwitchTo failed!\n");
+	if(ret)
 		return -1;
-	}
-	
-	printf("SwitchTo success!\n");
+
 	return 0;
 }

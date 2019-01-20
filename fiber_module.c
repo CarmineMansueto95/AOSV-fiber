@@ -48,7 +48,7 @@ long ioctl_commands(struct file* filp, unsigned int cmd, unsigned long arg){
 	
 	fiber_arg my_arg;
 	
-	unsigned int switchto_fib_id;
+	pid_t switchto_fib_id;
 	
 	// going to parse the passed command
 	switch(cmd){
@@ -59,7 +59,7 @@ long ioctl_commands(struct file* filp, unsigned int cmd, unsigned long arg){
 			
 		case IOCTL_CONVERT_THREAD:
 			printk(KERN_INFO "ioctl issued with IOCTL_CONVERT_THREAD command!\n");
-			ret = convert_thread((unsigned int*) arg);
+			ret = convert_thread((pid_t*) arg);
 			if(ret != 0){
 				printk(KERN_INFO "convert_thread failed!\n");
 				return -1;
@@ -82,7 +82,7 @@ long ioctl_commands(struct file* filp, unsigned int cmd, unsigned long arg){
 		
 		case IOCTL_SWITCH_TO:
 			printk(KERN_INFO "ioctl issued with IOCTL_SWITCH_TO command!\n");
-			copy_from_user(&switchto_fib_id, (const unsigned int*) arg, sizeof(unsigned int));
+			copy_from_user(&switchto_fib_id, (const pid_t*) arg, sizeof(unsigned int));
 			ret = switch_to(switchto_fib_id);
 			if(ret != 0){
 				printk(KERN_INFO "switch_to failed!\n");
@@ -100,6 +100,10 @@ long ioctl_commands(struct file* filp, unsigned int cmd, unsigned long arg){
 	return 0;
 }
 
+static struct kprobe my_kprobe = {
+	.pre_handler = kprobe_entry_handler,
+	.symbol_name = "do_exit"
+};
 
 static int __init mod_init(void){
 	
@@ -158,6 +162,14 @@ static int __init mod_init(void){
 	}
 	
 	printk(KERN_INFO "Device correctly installed into the system!\n");
+	
+	// Registering kprobe for do_exit()
+	ret = register_kprobe(&my_kprobe);
+	if(ret){
+		printk(KERN_INFO "Could not register kprobe!\n");
+		return -EFAULT;
+	}
+	
 	return 0;
 }
 
@@ -172,6 +184,8 @@ static void __exit mod_exit(void){
 	class_destroy(fib_cdevclass);
 	cdev_del(fib_cdev);
 	unregister_chrdev_region(fib_cdevt, NUM_MINORS);
+	unregister_kprobe(&my_kprobe);
+	
 }
 
 

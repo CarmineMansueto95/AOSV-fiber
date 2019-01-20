@@ -5,5 +5,5 @@ typedef struct fiber_arg_t{
     void* func;
     void* stack;
     void* params;
-    unsigned int ret;
+    pid_t ret;
 }fiber_arg;

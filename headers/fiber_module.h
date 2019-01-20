@@ -7,6 +7,8 @@
 // Declarations of functions
 int dev_open (struct inode* i, struct file* f);
 long ioctl_commands(struct file* filp, unsigned int cmd, unsigned long arg);
-extern int convert_thread(unsigned int* arg);
+extern int convert_thread(pid_t* arg);
 extern int create_fiber(fiber_arg* my_arg);
-extern int switch_to(unsigned int target_fib);
+extern int switch_to(pid_t target_fib);
+
+extern int kprobe_entry_handler(struct kprobe* kp, struct pt_regs* regs);

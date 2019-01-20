@@ -24,7 +24,7 @@ DEFINE_HASHTABLE(processes, BITS);
  // global counter of the fibers
 static atomic_t fiber_ctr = ATOMIC_INIT(0);	// static because it has to be allocated when program starts and live for all program life
 
-int convert_thread(unsigned int* arg){
+int convert_thread(pid_t* arg){
 	/* In arg I have to write:
 	   - the id of the created fiber
 	   - or 0 if the thread already called convert_thread
@@ -122,6 +122,8 @@ int convert_thread(unsigned int* arg){
 			//adding the thread to the hashtable of threads of process
 			hash_add_rcu(tmp->threads, &(thread->node), current_pid);
 			
+			atomic_inc(&(tmp->active_threads));	// incrementing the counter of threads of the process
+			
 			printk(KERN_INFO "Structures in convert_thread set up!\n");
 			//writing the fiber id in arg to give it to the userspace
 			ret = copy_to_user((unsigned int*)arg, &(fib_ctx->fiber_id), sizeof(unsigned int)); // I have to return fiber_id to UserSpace
@@ -190,6 +192,8 @@ int convert_thread(unsigned int* arg){
 	hash_add_rcu(process->threads, &(thread->node), current_pid);
 	
 	hash_add_rcu(processes, &(process->node), current_tgid);
+	
+	atomic_set(&(process->active_threads), 1);	// initializing the atomic counter of threads
 	
 	printk(KERN_INFO "Structures in convert_thread set up!\n");
 	//writing the fiber id in arg to give it to the userspace
@@ -269,7 +273,7 @@ int create_fiber(fiber_arg* my_arg){
 	
 }
 
-int switch_to(unsigned int target_fib){
+int switch_to(pid_t target_fib){
 	
 	struct process_t* tmp;
 	struct thread_t* tmp2;
@@ -342,4 +346,76 @@ int switch_to(unsigned int target_fib){
 	
 	printk(KERN_INFO "The current thread never called convert_thread! Cannot do switch_to!\n");
 	return -1;				
+}
+
+int kprobe_entry_handler(struct kprobe* kp, struct pt_regs* regs){
+	
+	int bkt;
+	
+	struct process_t* tmp;
+	struct thread_t* tmp2;
+	
+	struct fiber_context_t* tmp3;
+	
+	pid_t current_pid;		// thread id of the thread that called convert_thread
+	pid_t current_tgid;		// process id of the thread that called convert_thread
+	
+	struct pt_regs* current_regs;
+	
+	current_pid = current->pid;
+	current_tgid = current->tgid;
+	
+	current_regs = task_pt_regs(current);
+	
+	// going to check if the "current" thread called "convert_thread" at least once, otherwise it cannot do switch_to!
+	hash_for_each_possible_rcu(processes, tmp, node, current_tgid) {
+		if(tmp->process_id == current_tgid){
+			// I found the entry in the hashtable corresponding to the process of current thread
+			// I have to check if there is the struct thread corresponding to the current thread in its "threads" hashtable
+			
+			if(atomic_read(&(tmp->active_threads))==1){
+				// The thread that just exited was the last one!
+				// destroying all fibers
+				hash_for_each_rcu(tmp->fibers, bkt, tmp3, node){
+					kfree(tmp3->regs);
+					kfree(tmp3->fpu);
+					hash_del_rcu(&(tmp3->node));
+					kfree(tmp3);
+					atomic_dec(&(fiber_ctr));	// decrementing the global counter of fibers
+				}
+				// destroying all threads (actually just one)
+				hash_for_each_rcu(tmp->threads, bkt, tmp2, node){
+					hash_del_rcu(&(tmp2->node));
+					kfree(tmp2);
+				}
+				
+				//destroying the process
+				hash_del_rcu(&(tmp->node));
+				kfree(tmp);
+				
+				return 0;		
+			}
+			else{
+				// The thread that just exited wasn't the last one!
+				
+				// destroying the thread
+				hash_for_each_possible_rcu(tmp->threads, tmp2, node, current_pid){
+					if(tmp2->thread_id == current_pid){
+						if(tmp2->selected_fiber!=NULL){
+							// Saving the context to the fiber
+							memcpy(tmp2->selected_fiber->regs, current_regs, sizeof(struct pt_regs));
+							copy_fxregs_to_kernel(tmp2->selected_fiber->fpu); // saving the FPU into the old fiber
+							spin_lock(&(tmp2->selected_fiber->lock));
+							tmp2->selected_fiber->thread=0;
+							spin_unlock(&(tmp2->selected_fiber->lock));
+						}
+					}
+					hash_del_rcu(&(tmp2->node));
+					kfree(tmp2);
+				}
+				return 0;
+			}
+		}
+	}	
+	return 0;
 }
