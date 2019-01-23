@@ -1,4 +1,4 @@
-#include "shared.h"
+#include "module_shared.h"
 
 #define CLASS_NAME "fiberc"
 #define START_MINOR 0	// MINOR number to start when allocating minors to device

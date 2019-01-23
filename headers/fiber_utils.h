@@ -1,4 +1,4 @@
-#include "shared.h"
+#include "module_shared.h"
 
 typedef struct fiber_context_t{
 	pid_t				fiber_id;	// id of the fiber

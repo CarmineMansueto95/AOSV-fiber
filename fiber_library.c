@@ -8,9 +8,7 @@
 #include <sys/ioctl.h>	//in order to call ioctl()
 
 #include "headers/ioctl.h"
-#include "headers/shared.h"	// for fiber_arg_t type
-
-#define DEV_NAME "/dev/fiber"
+#include "headers/fiber_library.h"
 
 pid_t ConvertThreadToFiber(){
 	int ret;
