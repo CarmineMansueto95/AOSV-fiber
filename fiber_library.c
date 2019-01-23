@@ -10,33 +10,35 @@
 #include "headers/ioctl.h"
 #include "headers/fiber_library.h"
 
-pid_t ConvertThreadToFiber(){
+void* ConvertThreadToFiber(){
 	int ret;
-	pid_t fib_id;
+	pid_t* fib_id;
 	int fd;
 	
 	fd = open(DEV_NAME, O_RDWR);
 	
-	ret = ioctl(fd, IOCTL_CONVERT_THREAD, &fib_id);
-	if(ret || fib_id==0){
+	fib_id = (pid_t*) malloc(sizeof(pid_t));
+	
+	ret = ioctl(fd, IOCTL_CONVERT_THREAD, fib_id);
+	if(ret || *fib_id==0){
 		printf("%s\n", strerror(errno));
 		return 0;
 	}
 	return fib_id;
 }
 
-pid_t CreateFiber(ssize_t stack_size, void* func, void* params){
+void* CreateFiber(ssize_t stack_size, void* (*routine)(void*), void* args){
 	
 	int ret;
 	int fd;
-	pid_t fib_id;
+	pid_t* fib_id;
 	
 	fiber_arg my_arg;
 	
 	fd = open(DEV_NAME, O_RDWR);
 	
-	my_arg.func = func;
-	my_arg.params = params;
+	my_arg.routine = routine;
+	my_arg.args = args;
 	
 	void* stack = memalign(16,stack_size); // the stack must be 16 byte aligned
 	/*
@@ -46,29 +48,29 @@ pid_t CreateFiber(ssize_t stack_size, void* func, void* params){
     */
 	my_arg.stack = stack+stack_size+8;
 	
+	fib_id = (pid_t*) malloc(sizeof(pid_t));
+	
 	ret = ioctl(fd, IOCTL_CREATE_FIBER, &my_arg);
 	
-	fib_id = my_arg.ret;
+	*fib_id = my_arg.ret;
 	
-	if (ret || fib_id==0)
+	if (ret || *fib_id==0)
 		return 0;
 
 	return fib_id;
 }
 
-int SwitchTo(pid_t fiber_id){
+void SwitchToFiber(void* fiber){
 	int ret;
 	int fd;
-	pid_t f_id;
+	pid_t* f_id;
 	
-	f_id = fiber_id;
+	f_id = fiber;
 	
 	fd = open(DEV_NAME, O_RDWR);
 	
-	ret = ioctl(fd, IOCTL_SWITCH_TO, &f_id);
+	ret = ioctl(fd, IOCTL_SWITCH_TO, f_id);
 	
 	if(ret)
-		return -1;
-
-	return 0;
+		printf("SwitchTo failed!!!\n");
 }

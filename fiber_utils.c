@@ -241,9 +241,8 @@ int create_fiber(fiber_arg* my_arg){
 					memcpy(fib_ctx->regs, task_pt_regs(current), sizeof (struct pt_regs));
 					fib_ctx->regs->sp = (unsigned long)my_arg->stack;
 					fib_ctx->regs->bp = (unsigned long)my_arg->stack;
-					fib_ctx->regs->ip = (unsigned long)my_arg->func;
-					fib_ctx->regs->di = (unsigned long)my_arg->params;
-					fib_ctx->fpu = NULL;
+					fib_ctx->regs->ip = (unsigned long)my_arg->routine;
+					fib_ctx->regs->di = (unsigned long)my_arg->args;
 					
 					fib_ctx->fpu = kmalloc(sizeof(struct fpu), GFP_KERNEL); // I have not to initialize it, a new fiber has to have an empty FPU
 					

@@ -2,8 +2,8 @@
 
 // for CREATE_FIBER
 typedef struct fiber_arg_t{
-    void* func;
+    void* (*routine)(void*);
     void* stack;
-    void* params;
+    void* args;
     pid_t ret;
 }fiber_arg;
