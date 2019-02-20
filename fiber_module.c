@@ -91,6 +91,46 @@ long ioctl_commands(struct file* filp, unsigned int cmd, unsigned long arg){
 			printk(KERN_INFO "switch_to success!\n");
 			break;
 		
+		case IOCTL_FLS_ALLOC:
+			printk(KERN_INFO "ioctl issued with IOCTL_FLS_ALLOC command!\n");
+			ret = fls_alloc((unsigned long*) arg);
+			if(ret != 0){
+				printk(KERN_INFO "fls_alloc failed!\n");
+				return -1;
+			}
+			printk(KERN_INFO "fls_alloc success!\n");
+			break;
+		
+		case IOCTL_FLS_FREE:
+			printk(KERN_INFO "ioctl issued with IOCTL_FLS_ALLOC command!\n");
+			ret = fls_free((unsigned long*) arg);
+			if(ret!=0){
+				printk(KERN_INFO "fls_free failed!\n");
+				return -1;
+			}
+			printk(KERN_INFO "fls_free success!\n");
+			break;
+		
+		case IOCTL_FLS_GET:
+			printk(KERN_INFO "ioctl issued with IOCTL_FLS_GET command!\n");
+			ret = fls_get((struct fls_args*) arg);
+			if(ret!=0){
+				printk(KERN_INFO "fls_get failed!\n");
+				return -1;
+			}
+			printk(KERN_INFO "fls_get success!\n");
+			break;
+		
+		case IOCTL_FLS_SET:
+			printk(KERN_INFO "ioctl issued with IOCTL_FLS_SET command!\n");
+			ret = fls_set((struct fls_args*) arg);
+			if(ret!=0){
+				printk(KERN_INFO "fls_get failed!\n");
+				return -1;
+			}
+			printk(KERN_INFO "fls_set success!\n");
+			break;
+		
 		default:
 			printk(KERN_INFO "Wrong command!!!\n");
 			return -1;

@@ -7,8 +7,8 @@
 #include <malloc.h>
 #include <sys/ioctl.h>	//in order to call ioctl()
 
-#include "headers/ioctl.h"
-#include "headers/fiber_library.h"
+#include "ioctl.h"
+#include "fiber_library.h"
 
 void* ConvertThreadToFiber(){
 	int ret;
@@ -24,6 +24,9 @@ void* ConvertThreadToFiber(){
 		printf("%s\n", strerror(errno));
 		return 0;
 	}
+	
+	close(fd);
+	
 	return fib_id;
 }
 
@@ -54,8 +57,12 @@ void* CreateFiber(ssize_t stack_size, void* (*routine)(void*), void* args){
 	
 	*fib_id = my_arg.ret;
 	
-	if (ret || *fib_id==0)
+	if (ret || *fib_id==0){
+		close(fd);
 		return 0;
+	}
+	
+	close(fd);
 
 	return fib_id;
 }
@@ -73,4 +80,81 @@ void SwitchToFiber(void* fiber){
 	
 	if(ret)
 		printf("SwitchTo failed!!!\n");
+	
+	close(fd);
+}
+
+long FlsAlloc(void){
+	int ret;
+	long index;
+	int fd;
+
+	fd = open(DEV_NAME, O_RDWR);
+
+	ret = ioctl(fd, IOCTL_FLS_ALLOC, &index);
+	if(ret){
+		printf("FlsAlloc failed!");
+		close(fd);
+		return -1;
+	}
+	
+	close(fd);
+	
+	return index;
+}
+
+int FlsFree(long index){
+	int ret;
+	int fd;
+
+	fd = open(DEV_NAME, O_RDWR);
+
+	ret = ioctl(fd, IOCTL_FLS_FREE, &index);
+	if(ret){
+		printf("FlsFree failed!");
+		close(fd);
+		return -1;
+	}
+	
+	close(fd);
+	return 0;
+}
+
+long long FlsGetValue(long index){
+	int ret;
+	int fd;
+	struct fls_args fls_args;
+
+	fls_args.index = index;
+
+	fd = open(DEV_NAME, O_RDWR);
+	ret = ioctl(fd, IOCTL_FLS_GET, &fls_args);
+	if(ret){
+		printf("FlsGet failed!");
+		close(fd);
+		return -1;
+	}
+	
+	close(fd);
+	return fls_args.value;
+}
+
+int FlsSetValue(long index, long long value){
+	int ret;
+	int fd;
+	struct fls_args fls_args;
+
+	fls_args.index = index;
+	fls_args.value = value;
+
+	fd = open(DEV_NAME, O_RDWR);
+	ret = ioctl(fd, IOCTL_FLS_GET, &fls_args);
+	if(ret){
+		printf("FlsSet failed!");
+		close(fd);
+		return -1;
+	}
+	
+	close(fd);
+	return 0;
 }

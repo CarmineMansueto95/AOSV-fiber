@@ -95,7 +95,7 @@ int convert_thread(pid_t* arg){
 			memcpy(fib_ctx->regs, task_pt_regs(current), sizeof (struct pt_regs));
 			fib_ctx->fpu=NULL;
 			
-			fib_ctx->fpu = kmalloc(sizeof(struct fpu), GFP_KERNEL);
+			fib_ctx->fpu = kzalloc(sizeof(struct fpu), GFP_KERNEL);
 			copy_fxregs_to_kernel(fib_ctx->fpu); // initializing the FPU of the fiber with the one of current
 			
 			//assigning id to the fiber atomically
@@ -105,6 +105,12 @@ int convert_thread(pid_t* arg){
 			
 			fib_ctx->thread = current_pid;
 			spin_lock_init(&fib_ctx->lock);
+
+			//Empty FLS
+			fib_ctx->fls.size = 0;
+			fib_ctx->fls.fls = NULL;
+			fib_ctx->fls.bitmask = NULL;
+
 			
 			printk(KERN_INFO "Thread succesfully converted into Fiber, fiber_id=%u\n", fib_ctx->fiber_id);
 			
@@ -165,7 +171,7 @@ int convert_thread(pid_t* arg){
 	memcpy(fib_ctx->regs, task_pt_regs(current), sizeof (struct pt_regs));
 	fib_ctx->fpu=NULL;
 	
-	fib_ctx->fpu = kmalloc(sizeof(struct fpu), GFP_KERNEL);
+	fib_ctx->fpu = kzalloc(sizeof(struct fpu), GFP_KERNEL);
 	copy_fxregs_to_kernel(fib_ctx->fpu); // initializing the FPU of the fiber with the one of current
 	
 	//assigning id to the fiber atomically
@@ -175,6 +181,11 @@ int convert_thread(pid_t* arg){
 	
 	fib_ctx->thread = current_pid;
 	spin_lock_init(&fib_ctx->lock);
+
+	//Empty FLS
+	fib_ctx->fls.size = 0;
+	fib_ctx->fls.fls = NULL;
+	fib_ctx->fls.bitmask = NULL;
 	
 	printk(KERN_INFO "Thread succesfully converted into Fiber, fiber_id=%u\n", fib_ctx->fiber_id);
 
@@ -244,7 +255,7 @@ int create_fiber(fiber_arg* my_arg){
 					fib_ctx->regs->ip = (unsigned long)my_arg->routine;
 					fib_ctx->regs->di = (unsigned long)my_arg->args;
 					
-					fib_ctx->fpu = kmalloc(sizeof(struct fpu), GFP_KERNEL); // I have not to initialize it, a new fiber has to have an empty FPU
+					fib_ctx->fpu = kzalloc(sizeof(struct fpu), GFP_KERNEL); // I have not to initialize it, a new fiber has to have an empty FPU
 					
 					smp_mb();
 					fib_ctx->fiber_id = atomic_inc_return(&fiber_ctr);
@@ -252,6 +263,11 @@ int create_fiber(fiber_arg* my_arg){
 					
 					fib_ctx->thread = 0;	// a new fiber is free, no threads are running it
 					spin_lock_init(&fib_ctx->lock);
+
+					//Empty FLS
+					fib_ctx->fls.size = 0;
+					fib_ctx->fls.fls = NULL;
+					fib_ctx->fls.bitmask = NULL;
 					
 					// adding the fiber to the hashtable of fibers of process
 					hash_add_rcu(tmp->fibers, &(fib_ctx->node), fib_ctx->fiber_id);
@@ -347,6 +363,219 @@ int switch_to(pid_t target_fib){
 	return -1;				
 }
 
+int fls_alloc(unsigned long* arg){
+
+	struct process_t* tmp;
+	struct thread_t* tmp2;
+	struct fiber_context_t* fib_ctx;
+	struct fls_struct_t* fib_fls;
+
+	pid_t current_pid;		// thread id of the thread that called fls_alloc
+	pid_t current_tgid;		// process id of the thread that called fls_alloc
+
+	unsigned long index;
+	
+	current_pid = current->pid;
+	current_tgid = current->tgid;
+
+	// going to check if the "current" thread called "convert_thread" at least once
+	hash_for_each_possible_rcu(processes, tmp, node, current_tgid) {
+		if(tmp->process_id == current_tgid){
+			// I found the entry in the hashtable corresponding to the process of current thread
+			// I have to check if there is the struct thread corresponding to the current thread in its "threads" hashtable
+			hash_for_each_possible_rcu(tmp->threads, tmp2, node, current_pid) {
+				if(tmp2->thread_id == current_pid){
+					// I found it! "current" already called convert_thread, so it is already a fiber.
+					
+					fib_ctx = tmp2->selected_fiber;
+					fib_fls = &(fib_ctx->fls);
+
+					if(fib_fls->fls == NULL){
+						// First time fls_alloc on this fiber, I have to allocate the array
+						fib_fls->fls = kvzalloc(MAX_FLS_INDEX * sizeof(long long), GFP_KERNEL);
+						fib_fls->size = 0;
+						fib_fls->bitmask = kzalloc(BITS_TO_LONGS(MAX_FLS_INDEX) * sizeof(unsigned long), GFP_KERNEL);
+					}
+
+					index = find_first_zero_bit(fib_fls->bitmask, MAX_FLS_INDEX);
+					if(index < MAX_FLS_INDEX && fib_fls->size < MAX_FLS_INDEX-1){
+						fib_fls->size +=1;
+						set_bit(index, fib_fls->bitmask);
+						if(copy_to_user((void*) arg, (void*) &index, sizeof(long))){
+							// Failed! Undo!
+							fib_fls->size -= 1;
+							clear_bit(index, fib_fls->bitmask);
+							return -1;
+						}
+						return 0;
+					}
+				}
+			}
+		}
+	}
+	return -1;
+}
+
+int fls_free(unsigned long* arg){
+
+	struct process_t* tmp;
+	struct thread_t* tmp2;
+	struct fiber_context_t* fib_ctx;
+	struct fls_struct_t* fib_fls;
+
+	pid_t current_pid;		// thread id of the thread that called fls_alloc
+	pid_t current_tgid;		// process id of the thread that called fls_alloc
+
+	unsigned long index;
+	
+	current_pid = current->pid;
+	current_tgid = current->tgid;
+
+	// getting the requested index from userspace
+	if(copy_from_user((unsigned long*) &index, (unsigned long*) arg, sizeof(unsigned long))){
+		return -1;
+	}
+	if(index >= MAX_FLS_INDEX){
+		return -1;
+	}
+
+	// going to check if the "current" thread called "convert_thread" at least once
+	hash_for_each_possible_rcu(processes, tmp, node, current_tgid) {
+		if(tmp->process_id == current_tgid){
+			// I found the entry in the hashtable corresponding to the process of current thread
+			// I have to check if there is the struct thread corresponding to the current thread in its "threads" hashtable
+			hash_for_each_possible_rcu(tmp->threads, tmp2, node, current_pid) {
+				if(tmp2->thread_id == current_pid){
+					// I found it! "current" already called convert_thread, so it is already a fiber.
+
+					fib_ctx = tmp2->selected_fiber;
+					fib_fls = &(fib_ctx->fls);
+
+					if(fib_fls->fls == NULL || fib_fls->bitmask == NULL){
+						return -1;
+					}
+
+					fib_fls->size -= 1;
+					clear_bit(index, fib_fls->bitmask);
+
+					return 0;
+				}
+			}
+		}
+	}
+	return -1;
+}
+
+int fls_get(struct fls_args* arg){
+	struct process_t* tmp;
+	struct thread_t* tmp2;
+	struct fiber_context_t* fib_ctx;
+	struct fls_struct_t* fib_fls;
+
+	pid_t current_pid;		// thread id of the thread that called fls_alloc
+	pid_t current_tgid;		// process id of the thread that called fls_alloc
+
+	struct fls_args fls_args;
+	
+	current_pid = current->pid;
+	current_tgid = current->tgid;
+
+	// getting the args from userspace
+	if(copy_from_user((struct fls_args*) &fls_args, (struct fls_args*) arg, sizeof(struct fls_args))){
+		return -1;
+	}
+	//checking if the requested index is allowed
+	if(fls_args.index >= MAX_FLS_INDEX){
+		return -1;
+	}
+
+	// going to check if the "current" thread called "convert_thread" at least once
+	hash_for_each_possible_rcu(processes, tmp, node, current_tgid) {
+		if(tmp->process_id == current_tgid){
+			// I found the entry in the hashtable corresponding to the process of current thread
+			// I have to check if there is the struct thread corresponding to the current thread in its "threads" hashtable
+			hash_for_each_possible_rcu(tmp->threads, tmp2, node, current_pid) {
+				if(tmp2->thread_id == current_pid){
+					// I found it! "current" already called convert_thread, so it is already a fiber.
+
+					fib_ctx = tmp2->selected_fiber;
+					fib_fls = &(fib_ctx->fls);
+
+					if(fib_fls->fls == NULL || fib_fls->bitmask == NULL){
+						return -1;
+					}
+
+					// checking if the requested index is allowed
+					if(test_bit(fls_args.index, fib_fls->bitmask)){
+						fls_args.value = fib_fls->fls[fls_args.index];
+						if(copy_to_user((struct fls_args*) arg, (struct fls_args*) &fls_args, sizeof(struct fls_args))){
+							return -1;
+						}
+						return 0;
+					}
+
+					return -1;
+				}
+			}
+		}
+	}
+	return -1;			
+
+}
+
+int fls_set(struct fls_args* arg){
+	struct process_t* tmp;
+	struct thread_t* tmp2;
+	struct fiber_context_t* fib_ctx;
+	struct fls_struct_t* fib_fls;
+
+	pid_t current_pid;		// thread id of the thread that called fls_alloc
+	pid_t current_tgid;		// process id of the thread that called fls_alloc
+
+	struct fls_args fls_args;
+	
+	current_pid = current->pid;
+	current_tgid = current->tgid;
+
+	// getting the args from userspace
+	if(copy_from_user((struct fls_args*) &fls_args, (struct fls_args*) arg, sizeof(struct fls_args))){
+		return -1;
+	}
+	//checking if the requested index is allowed
+	if(fls_args.index >= MAX_FLS_INDEX){
+		return -1;
+	}
+
+	// going to check if the "current" thread called "convert_thread" at least once
+	hash_for_each_possible_rcu(processes, tmp, node, current_tgid) {
+		if(tmp->process_id == current_tgid){
+			// I found the entry in the hashtable corresponding to the process of current thread
+			// I have to check if there is the struct thread corresponding to the current thread in its "threads" hashtable
+			hash_for_each_possible_rcu(tmp->threads, tmp2, node, current_pid) {
+				if(tmp2->thread_id == current_pid){
+					// I found it! "current" already called convert_thread, so it is already a fiber.
+
+					fib_ctx = tmp2->selected_fiber;
+					fib_fls = &(fib_ctx->fls);
+
+					if(fib_fls->fls == NULL || fib_fls->bitmask == NULL){
+						return -1;
+					}
+
+					// checking if the requested index is allowed
+					if(test_bit(fls_args.index, fib_fls->bitmask)){
+						fib_fls->fls[fls_args.index] = fls_args.value;
+						return 0;
+					}
+
+					return -1;
+				}
+			}
+		}
+	}
+	return -1;
+}
+
 int kprobe_entry_handler(struct kprobe* kp, struct pt_regs* regs){
 	
 	int bkt;
@@ -366,7 +595,7 @@ int kprobe_entry_handler(struct kprobe* kp, struct pt_regs* regs){
 	
 	current_regs = task_pt_regs(current);
 	
-	// going to check if the "current" thread called "convert_thread" at least once, otherwise it cannot do switch_to!
+	// going to check if the "current" thread called "convert_thread" at least once.
 	hash_for_each_possible_rcu(processes, tmp, node, current_tgid) {
 		if(tmp->process_id == current_tgid){
 			// I found the entry in the hashtable corresponding to the process of current thread
@@ -378,6 +607,8 @@ int kprobe_entry_handler(struct kprobe* kp, struct pt_regs* regs){
 				hash_for_each_rcu(tmp->fibers, bkt, tmp3, node){
 					kfree(tmp3->regs);
 					kfree(tmp3->fpu);
+					kfree(tmp3->fls.fls);
+					kfree(tmp3->fls.bitmask);
 					hash_del_rcu(&(tmp3->node));
 					kfree(tmp3);
 					atomic_dec(&(fiber_ctr));	// decrementing the global counter of fibers
