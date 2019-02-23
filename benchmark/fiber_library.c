@@ -136,6 +136,7 @@ long long FlsGetValue(long index){
 	}
 	
 	close(fd);
+	//printf("FLT_GET value: %lld\n", fls_args.value);
 	return fls_args.value;
 }
 
@@ -144,11 +145,13 @@ int FlsSetValue(long index, long long value){
 	int fd;
 	struct fls_args fls_args;
 
+	//printf("FLS_SET value: %lld\n", value);
+
 	fls_args.index = index;
 	fls_args.value = value;
 
 	fd = open(DEV_NAME, O_RDWR);
-	ret = ioctl(fd, IOCTL_FLS_GET, &fls_args);
+	ret = ioctl(fd, IOCTL_FLS_SET, &fls_args);
 	if(ret){
 		printf("FlsSet failed!");
 		close(fd);
