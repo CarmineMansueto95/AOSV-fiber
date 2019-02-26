@@ -1,6 +1,4 @@
-/*
- * Definitions used both by kernel and userspace library
-*/
+// Definitions used both by kernel and userspace library
 
 #define DEVICE_NAME "fiber"
 
@@ -12,7 +10,8 @@ typedef struct fiber_arg_t{
     pid_t ret;
 }fiber_arg;
 
-struct fls_args{
+// for FLS_GET and FLS_SET
+struct fls_args_t{
     unsigned long index;
     long long value;
 };

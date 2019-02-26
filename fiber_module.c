@@ -37,7 +37,7 @@ static char* set_permission(struct device *dev, umode_t *mode){
 
 
 int dev_open(struct inode* i, struct file* f){
-	printk(KERN_INFO "Device opened correctly!\n");
+	//printk(KERN_INFO "Device opened correctly!\n");
 	return 0;
 }
 
@@ -46,7 +46,7 @@ long ioctl_commands(struct file* filp, unsigned int cmd, unsigned long arg){
 	
 	int ret;
 	
-	fiber_arg my_arg;
+	struct fiber_arg_t my_arg;
 	
 	pid_t switchto_fib_id;
 	
@@ -58,77 +58,77 @@ long ioctl_commands(struct file* filp, unsigned int cmd, unsigned long arg){
 			break;
 			
 		case IOCTL_CONVERT_THREAD:
-			printk(KERN_INFO "ioctl issued with IOCTL_CONVERT_THREAD command!\n");
+			//printk(KERN_INFO "ioctl issued with IOCTL_CONVERT_THREAD command!\n");
 			ret = convert_thread((pid_t*) arg);
 			if(ret != 0){
 				printk(KERN_INFO "convert_thread failed!\n");
 				return -1;
 			}
-			printk(KERN_INFO "convert_thread success!\n");
+			//printk(KERN_INFO "convert_thread success!\n");
 			break;
 		
 		case IOCTL_CREATE_FIBER:
-			printk(KERN_INFO "ioctl issued with IOCTL_CREATE_FIBER command!\n");
-			copy_from_user(&my_arg, (const struct fiber_arg*) arg, sizeof(fiber_arg));
+			//printk(KERN_INFO "ioctl issued with IOCTL_CREATE_FIBER command!\n");
+			copy_from_user(&my_arg, (const struct fiber_arg_t*) arg, sizeof(struct fiber_arg_t));
 			ret = create_fiber(&my_arg);
 			if(ret != 0){
 				printk(KERN_INFO "create_fiber failed!\n");
 				return -1;
 			}
-			copy_to_user((struct fiber_arg*) arg, (const struct fiber_arg*) &my_arg, sizeof(fiber_arg));
+			copy_to_user((struct fiber_arg*) arg, (const struct fiber_arg_t*) &my_arg, sizeof(struct fiber_arg_t));
 			
-			printk(KERN_INFO "create_fiber success!\n");
+			//printk(KERN_INFO "create_fiber success!\n");
 			break;
 		
 		case IOCTL_SWITCH_TO:
-			printk(KERN_INFO "ioctl issued with IOCTL_SWITCH_TO command!\n");
+			//printk(KERN_INFO "ioctl issued with IOCTL_SWITCH_TO command!\n");
 			copy_from_user(&switchto_fib_id, (const pid_t*) arg, sizeof(unsigned int));
 			ret = switch_to(switchto_fib_id);
 			if(ret != 0){
 				printk(KERN_INFO "switch_to failed!\n");
 				return -1;
 			}
-			printk(KERN_INFO "switch_to success!\n");
+			//printk(KERN_INFO "switch_to success!\n");
 			break;
 		
 		case IOCTL_FLS_ALLOC:
-			printk(KERN_INFO "ioctl issued with IOCTL_FLS_ALLOC command!\n");
+			//printk(KERN_INFO "ioctl issued with IOCTL_FLS_ALLOC command!\n");
 			ret = fls_alloc((unsigned long*) arg);
 			if(ret != 0){
 				printk(KERN_INFO "fls_alloc failed!\n");
 				return -1;
 			}
-			printk(KERN_INFO "fls_alloc success!\n");
+			//printk(KERN_INFO "fls_alloc success!\n");
 			break;
 		
 		case IOCTL_FLS_FREE:
-			printk(KERN_INFO "ioctl issued with IOCTL_FLS_ALLOC command!\n");
+			//printk(KERN_INFO "ioctl issued with IOCTL_FLS_ALLOC command!\n");
 			ret = fls_free((unsigned long*) arg);
 			if(ret!=0){
 				printk(KERN_INFO "fls_free failed!\n");
 				return -1;
 			}
-			printk(KERN_INFO "fls_free success!\n");
+			//printk(KERN_INFO "fls_free success!\n");
 			break;
 		
 		case IOCTL_FLS_GET:
-			printk(KERN_INFO "ioctl issued with IOCTL_FLS_GET command!\n");
-			ret = fls_get((struct fls_args*) arg);
+			//printk(KERN_INFO "ioctl issued with IOCTL_FLS_GET command!\n");
+			ret = fls_get((struct fls_args_t*) arg);
 			if(ret!=0){
 				printk(KERN_INFO "fls_get failed!\n");
 				return -1;
 			}
-			printk(KERN_INFO "fls_get success!\n");
+			//printk(KERN_INFO "fls_get success!\n");
 			break;
 		
 		case IOCTL_FLS_SET:
-			printk(KERN_INFO "ioctl issued with IOCTL_FLS_SET command!\n");
-			ret = fls_set((struct fls_args*) arg);
+			//printk(KERN_INFO "ioctl issued with IOCTL_FLS_SET command!\n");
+			ret = fls_set((struct fls_args_t*) arg);
 			if(ret!=0){
 				printk(KERN_INFO "fls_get failed!\n");
 				return -1;
 			}
-			printk(KERN_INFO "fls_set success!\n");
+			//printk(KERN_INFO "fls_set success!\n");
 			break;
 		
 		default:

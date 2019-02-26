@@ -46,7 +46,7 @@ int convert_thread(pid_t* arg){
 	current_pid = current->pid;
 	current_tgid = current->tgid;
 	
-	printk(KERN_INFO "CONVERT_THREAD: current_pid = %u | current_tgid = %u\n", current_pid, current_tgid);
+	//printk(KERN_INFO "CONVERT_THREAD: current_pid = %u | current_tgid = %u\n", current_pid, current_tgid);
 	
 	err=-1;	//to be used with copy_to_user()
 	succ=0; //to be used with copy_to_user()
@@ -112,7 +112,7 @@ int convert_thread(pid_t* arg){
 			fib_ctx->fls.bitmask = NULL;
 
 			
-			printk(KERN_INFO "Thread succesfully converted into Fiber, fiber_id=%u\n", fib_ctx->fiber_id);
+			//printk(KERN_INFO "Thread succesfully converted into Fiber, fiber_id=%u\n", fib_ctx->fiber_id);
 			
 
 			// adding the fiber to the hashtable of fibers of process
@@ -130,7 +130,7 @@ int convert_thread(pid_t* arg){
 			
 			atomic_inc(&(tmp->active_threads));	// incrementing the counter of threads of the process
 			
-			printk(KERN_INFO "Structures in convert_thread set up!\n");
+			//printk(KERN_INFO "Structures in convert_thread set up!\n");
 			//writing the fiber id in arg to give it to the userspace
 			ret = copy_to_user((unsigned int*)arg, &(fib_ctx->fiber_id), sizeof(unsigned int)); // I have to return fiber_id to UserSpace
 			if(ret!=0){
@@ -187,7 +187,7 @@ int convert_thread(pid_t* arg){
 	fib_ctx->fls.fls = NULL;
 	fib_ctx->fls.bitmask = NULL;
 	
-	printk(KERN_INFO "Thread succesfully converted into Fiber, fiber_id=%u\n", fib_ctx->fiber_id);
+	//printk(KERN_INFO "Thread succesfully converted into Fiber, fiber_id=%u\n", fib_ctx->fiber_id);
 
 	process->process_id = current_tgid;
 	thread->process = process;
@@ -206,7 +206,7 @@ int convert_thread(pid_t* arg){
 	
 	atomic_set(&(process->active_threads), 1);	// initializing the atomic counter of threads
 	
-	printk(KERN_INFO "Structures in convert_thread set up!\n");
+	//printk(KERN_INFO "Structures in convert_thread set up!\n");
 	//writing the fiber id in arg to give it to the userspace
 	ret = copy_to_user((unsigned int*)arg, &(fib_ctx->fiber_id), sizeof(unsigned int));  // I have to return fiber_id to UserSpace
 	if(ret!=0){
@@ -216,7 +216,7 @@ int convert_thread(pid_t* arg){
 	return 0;
 }
 
-int create_fiber(fiber_arg* my_arg){
+int create_fiber(struct fiber_arg_t* my_arg){
 	
 	unsigned int err;
 	struct fiber_context_t* fib_ctx;
@@ -230,7 +230,7 @@ int create_fiber(fiber_arg* my_arg){
 	current_pid = current->pid;
 	current_tgid = current->tgid;
 	
-	printk(KERN_INFO "CREATE_FIBER: current_pid = %u | current_tgid = %u\n", current_pid, current_tgid);
+	//printk(KERN_INFO "CREATE_FIBER: current_pid = %u | current_tgid = %u\n", current_pid, current_tgid);
 	
 	err=0;	//to be used with copy_to_user(), it is 0 because userspace expects the fiber_id (which is >0) or 0 if any error happened
 	
@@ -243,7 +243,7 @@ int create_fiber(fiber_arg* my_arg){
 				if(tmp2->thread_id == current_pid){
 					// I found it! "current" already called convert_thread, so it is already a fiber. So it can create a fiber!
 					
-					fib_ctx = kmalloc(sizeof(fiber_context_t), GFP_KERNEL);
+					fib_ctx = kmalloc(sizeof(struct fiber_context_t), GFP_KERNEL);
 					if(!fib_ctx) return -1;
 					
 					fib_ctx->regs = kmalloc(sizeof (struct pt_regs), GFP_KERNEL);
@@ -255,8 +255,9 @@ int create_fiber(fiber_arg* my_arg){
 					fib_ctx->regs->ip = (unsigned long)my_arg->routine;
 					fib_ctx->regs->di = (unsigned long)my_arg->args;
 					
-					fib_ctx->fpu = kzalloc(sizeof(struct fpu), GFP_KERNEL); // I have not to initialize it, a new fiber has to have an empty FPU
-					
+					fib_ctx->fpu = kzalloc(sizeof(struct fpu), GFP_KERNEL);
+					copy_fxregs_to_kernel(fib_ctx->fpu); // initializing the FPU of the fiber with the one of current
+
 					smp_mb();
 					fib_ctx->fiber_id = atomic_inc_return(&fiber_ctr);
 					smp_mb();
@@ -274,7 +275,7 @@ int create_fiber(fiber_arg* my_arg){
 					
 					my_arg->ret = fib_ctx->fiber_id;
 					
-					printk(KERN_INFO "Fiber succesfully created! fiber_id = %u\n", fib_ctx->fiber_id);
+					//printk(KERN_INFO "Fiber succesfully created! fiber_id = %u\n", fib_ctx->fiber_id);
 
 					return 0;
 				}
@@ -304,6 +305,8 @@ int switch_to(pid_t target_fib){
 	current_tgid = current->tgid;
 	
 	current_regs = task_pt_regs(current);
+
+	//printk(KERN_INFO "SWITCH_TO: current_pid = %u | current_tgid = %u | switch_to_fib %u\n", current_pid, current_tgid, target_fib);
 	
 	// going to check if the "current" thread called "convert_thread" at least once, otherwise it cannot do switch_to!
 	hash_for_each_possible_rcu(processes, tmp, node, current_tgid) {
@@ -327,6 +330,7 @@ int switch_to(pid_t target_fib){
 							}
 							if(tmp3->thread != 0){
 								printk(KERN_INFO "the fiber is occupied by another thread!");
+								spin_unlock(&tmp3->lock);
 								return -1;
 							}
 							
@@ -466,7 +470,7 @@ int fls_free(unsigned long* arg){
 	return -1;
 }
 
-int fls_get(struct fls_args* arg){
+int fls_get(struct fls_args_t* arg){
 	struct process_t* tmp;
 	struct thread_t* tmp2;
 	struct fiber_context_t* fib_ctx;
@@ -475,13 +479,13 @@ int fls_get(struct fls_args* arg){
 	pid_t current_pid;		// thread id of the thread that called fls_alloc
 	pid_t current_tgid;		// process id of the thread that called fls_alloc
 
-	struct fls_args fls_args;
+	struct fls_args_t fls_args;
 	
 	current_pid = current->pid;
 	current_tgid = current->tgid;
 
 	// getting the args from userspace
-	if(copy_from_user((struct fls_args*) &fls_args, (struct fls_args*) arg, sizeof(struct fls_args))){
+	if(copy_from_user((struct fls_args_t*) &fls_args, (struct fls_args_t*) arg, sizeof(struct fls_args_t))){
 		return -1;
 	}
 	//checking if the requested index is allowed
@@ -508,7 +512,8 @@ int fls_get(struct fls_args* arg){
 					// checking if the requested index is allowed
 					if(test_bit(fls_args.index, fib_fls->bitmask)){
 						fls_args.value = fib_fls->fls[fls_args.index];
-						if(copy_to_user((struct fls_args*) arg, (struct fls_args*) &fls_args, sizeof(struct fls_args))){
+						//printk(KERN_INFO "FLS_GET value %lld\n", fls_args.value);
+						if(copy_to_user((struct fls_args_t*) arg, (struct fls_args_t*) &fls_args, sizeof(struct fls_args_t))){
 							return -1;
 						}
 						return 0;
@@ -523,7 +528,7 @@ int fls_get(struct fls_args* arg){
 
 }
 
-int fls_set(struct fls_args* arg){
+int fls_set(struct fls_args_t* arg){
 	struct process_t* tmp;
 	struct thread_t* tmp2;
 	struct fiber_context_t* fib_ctx;
@@ -532,19 +537,23 @@ int fls_set(struct fls_args* arg){
 	pid_t current_pid;		// thread id of the thread that called fls_alloc
 	pid_t current_tgid;		// process id of the thread that called fls_alloc
 
-	struct fls_args fls_args;
+	struct fls_args_t fls_args;
 	
 	current_pid = current->pid;
 	current_tgid = current->tgid;
 
+	//printk(KERN_INFO "FLS_SET value: %lld\n", arg->value);
+
 	// getting the args from userspace
-	if(copy_from_user((struct fls_args*) &fls_args, (struct fls_args*) arg, sizeof(struct fls_args))){
+	if(copy_from_user((struct fls_args_t*) &fls_args, (struct fls_args_t*) arg, sizeof(struct fls_args_t))){
 		return -1;
 	}
 	//checking if the requested index is allowed
 	if(fls_args.index >= MAX_FLS_INDEX){
 		return -1;
 	}
+
+	//printk(KERN_INFO "FLS_SET value: %lld\n", fls_args.value);
 
 	// going to check if the "current" thread called "convert_thread" at least once
 	hash_for_each_possible_rcu(processes, tmp, node, current_tgid) {

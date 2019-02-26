@@ -36,7 +36,7 @@ void* CreateFiber(ssize_t stack_size, void* (*routine)(void*), void* args){
 	int fd;
 	pid_t* fib_id;
 	
-	fiber_arg my_arg;
+	struct fiber_arg_t my_arg;
 	
 	fd = open(DEV_NAME, O_RDWR);
 	
@@ -123,7 +123,7 @@ int FlsFree(long index){
 long long FlsGetValue(long index){
 	int ret;
 	int fd;
-	struct fls_args fls_args;
+	struct fls_args_t fls_args;
 
 	fls_args.index = index;
 
@@ -143,7 +143,7 @@ long long FlsGetValue(long index){
 int FlsSetValue(long index, long long value){
 	int ret;
 	int fd;
-	struct fls_args fls_args;
+	struct fls_args_t fls_args;
 
 	//printf("FLS_SET value: %lld\n", value);
 
