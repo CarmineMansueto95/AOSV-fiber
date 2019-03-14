@@ -11,6 +11,8 @@
 #include <linux/slab.h>				// needed for kmalloc() and kfree()
 #include <linux/hashtable.h>
 
+#include <linux/fs.h>
+
 #include "headers/fiber_module.h"	// for macros and function declarations
 #include "headers/ioctl.h"
 
@@ -22,11 +24,9 @@ static dev_t			fib_cdevt;	// for the return of alloc_chrdev_region. This will co
 //file operations for the device
 const struct file_operations fops = {
 	.owner	=	THIS_MODULE,
-	.open	=	dev_open,					//function to be called when device is opened from Userspace
+	.open	=	dev_open,				// function to be called when device is opened from Userspace
 	.unlocked_ioctl = ioctl_commands	// function that is now called instead of ioctl(), it will handle ioctl commands when Userspace calls ioctl()
 };
-
-
 
 //Permissions to open the device from Userspace
 static char* set_permission(struct device *dev, umode_t *mode){
@@ -46,8 +46,6 @@ long ioctl_commands(struct file* filp, unsigned int cmd, unsigned long arg){
 	
 	int ret;
 	
-	struct fiber_arg_t my_arg;
-	
 	pid_t switchto_fib_id;
 	
 	// going to parse the passed command
@@ -58,91 +56,148 @@ long ioctl_commands(struct file* filp, unsigned int cmd, unsigned long arg){
 			break;
 			
 		case IOCTL_CONVERT_THREAD:
-			//printk(KERN_INFO "ioctl issued with IOCTL_CONVERT_THREAD command!\n");
 			ret = convert_thread((pid_t*) arg);
 			if(ret != 0){
-				printk(KERN_INFO "convert_thread failed!\n");
+				//printk(KERN_INFO "convert_thread failed!\n");
 				return -1;
 			}
-			//printk(KERN_INFO "convert_thread success!\n");
 			break;
 		
 		case IOCTL_CREATE_FIBER:
-			//printk(KERN_INFO "ioctl issued with IOCTL_CREATE_FIBER command!\n");
-			copy_from_user(&my_arg, (const struct fiber_arg_t*) arg, sizeof(struct fiber_arg_t));
-			ret = create_fiber(&my_arg);
+			ret = create_fiber((struct fiber_arg_t*)arg);
 			if(ret != 0){
-				printk(KERN_INFO "create_fiber failed!\n");
+				//printk(KERN_INFO "create_fiber failed!\n");
 				return -1;
 			}
-			copy_to_user((struct fiber_arg*) arg, (const struct fiber_arg_t*) &my_arg, sizeof(struct fiber_arg_t));
-			
-			//printk(KERN_INFO "create_fiber success!\n");
 			break;
 		
 		case IOCTL_SWITCH_TO:
-			//printk(KERN_INFO "ioctl issued with IOCTL_SWITCH_TO command!\n");
 			copy_from_user(&switchto_fib_id, (const pid_t*) arg, sizeof(unsigned int));
 			ret = switch_to(switchto_fib_id);
 			if(ret != 0){
-				printk(KERN_INFO "switch_to failed!\n");
+				//printk(KERN_INFO "switch_to failed!\n");
 				return -1;
 			}
-			//printk(KERN_INFO "switch_to success!\n");
 			break;
 		
 		case IOCTL_FLS_ALLOC:
-			//printk(KERN_INFO "ioctl issued with IOCTL_FLS_ALLOC command!\n");
 			ret = fls_alloc((unsigned long*) arg);
 			if(ret != 0){
-				printk(KERN_INFO "fls_alloc failed!\n");
+				//printk(KERN_INFO "fls_alloc failed!\n");
 				return -1;
 			}
-			//printk(KERN_INFO "fls_alloc success!\n");
 			break;
 		
 		case IOCTL_FLS_FREE:
-			//printk(KERN_INFO "ioctl issued with IOCTL_FLS_ALLOC command!\n");
 			ret = fls_free((unsigned long*) arg);
 			if(ret!=0){
-				printk(KERN_INFO "fls_free failed!\n");
+				//printk(KERN_INFO "fls_free failed!\n");
 				return -1;
 			}
-			//printk(KERN_INFO "fls_free success!\n");
 			break;
-		
+
 		case IOCTL_FLS_GET:
-			//printk(KERN_INFO "ioctl issued with IOCTL_FLS_GET command!\n");
 			ret = fls_get((struct fls_args_t*) arg);
 			if(ret!=0){
-				printk(KERN_INFO "fls_get failed!\n");
+				//printk(KERN_INFO "fls_get failed!\n");
 				return -1;
 			}
-			//printk(KERN_INFO "fls_get success!\n");
 			break;
-		
+
 		case IOCTL_FLS_SET:
-			//printk(KERN_INFO "ioctl issued with IOCTL_FLS_SET command!\n");
 			ret = fls_set((struct fls_args_t*) arg);
 			if(ret!=0){
-				printk(KERN_INFO "fls_get failed!\n");
+				//printk(KERN_INFO "fls_get failed!\n");
 				return -1;
 			}
-			//printk(KERN_INFO "fls_set success!\n");
 			break;
-		
+
 		default:
 			printk(KERN_INFO "Wrong command!!!\n");
 			return -1;
-			
 	}
 
+	return 0;
+}
+
+int kprobe_proc_readdir_handler(struct kretprobe_instance *p, struct pt_regs *regs){
+
+	// Quando viene fatto "ls" in /proc/PID o una sua sottodirectory, viene chiamata la proc_pident_readdir, che l'abbiamo probata e quindi finiamo in questa funzione
+    // Qui vediamo se siamo nella cartella PID, se si vediamo se il PID ha qualche fiber, se si allora istanziamo la cartella "fibers" in modo che
+	// verrà mostrata da "ls"
+    
+	struct file *file;
+    struct pid_entry *ents;
+    unsigned int nents;
+    unsigned long folder_pid;
+
+    file = (struct file *)regs->di;
+    ents = (struct pid_entry *)regs->dx;
+    nents = (unsigned int)regs->cx;
+
+	// stampo il nome della directory corrente in cui sono
+	printk(KERN_INFO "file->f_path.dentry->dname.name: %s\n", file->f_path.dentry->d_name.name);
+
+    if(kstrtoul(file->f_path.dentry->d_name.name, 10, &folder_pid))
+        return 0;
+
+    return 0;
+}
+
+int kprobe_proc_post_readdir_handler(struct kretprobe_instance *p, struct pt_regs *regs){
+	return 0;
+}
+
+int kprobe_proc_lookup_handler(struct kretprobe_instance *p, struct pt_regs *regs){
+	struct dentry *dentry;
+    struct pid_entry *ents;
+    unsigned int nents;
+
+    unsigned long folder_pid;
+
+    dentry = (struct dentry *)regs->si;
+    ents = (struct pid_entry *)regs->dx;
+    nents = (unsigned int)regs->cx;
+
+	printk(KERN_INFO "dentry->d_name.name: %s\n", dentry->d_name.name);
+
+    // se la directory in cui sono è il PID di un processo allora salvo il PID in folder_pid e vado avanti
+    if (kstrtoul(dentry->d_name.name, 10, &folder_pid))
+        return 0;
+
+    // creo la directory "fibers" all'interno della directory del PID del processo
+	/*
+    pdata->ents = kmalloc(sizeof(struct pid_entry) * (nents + 1), GFP_KERNEL);
+    memcpy(pdata->ents, ents, sizeof(struct pid_entry) * nents);
+    memcpy(&pdata->ents[nents], &fiber_folder, sizeof(struct pid_entry));
+
+    regs->dx = (unsigned long)pdata->ents;
+    regs->cx = nents + 1;
+	*/
+    return 0;
+}
+
+int kprobe_proc_post_lookup_handler(struct kretprobe_instance *p, struct pt_regs *regs){
 	return 0;
 }
 
 static struct kprobe my_kprobe = {
 	.pre_handler = kprobe_entry_handler,
 	.symbol_name = "do_exit"
+};
+
+static struct kretprobe readdir_probe = {
+	.kp = {.symbol_name = "proc_pident_readdir"},
+	.entry_handler = kprobe_proc_readdir_handler,
+	.handler = kprobe_proc_post_readdir_handler,
+	.data_size = sizeof(struct kret_data)
+};
+
+static struct kretprobe lookup_probe = {
+	.kp = {.symbol_name = "proc_pident_lookup"},
+    .entry_handler = kprobe_proc_lookup_handler,
+	.handler = kprobe_proc_post_lookup_handler,
+	.data_size = sizeof(struct kret_data)
 };
 
 static int __init mod_init(void){
@@ -209,6 +264,20 @@ static int __init mod_init(void){
 		printk(KERN_INFO "Could not register kprobe!\n");
 		return -EFAULT;
 	}
+
+	// Registering kretprobe for proc_pident_readdir
+	ret = register_kretprobe(&readdir_probe);
+	if(ret){
+		printk(KERN_INFO "Could not register kretprobe!\n");
+		return -EFAULT;
+	}
+
+	// Registering kretprobe for proc_pident_lookup
+	ret = register_kretprobe(&lookup_probe);
+	if(ret){
+		printk(KERN_INFO "Could not register kretprobe!\n");
+		return -EFAULT;
+	}
 	
 	return 0;
 }
@@ -225,13 +294,14 @@ static void __exit mod_exit(void){
 	cdev_del(fib_cdev);
 	unregister_chrdev_region(fib_cdevt, NUM_MINORS);
 	unregister_kprobe(&my_kprobe);
-	
+	unregister_kretprobe(&readdir_probe);
+	unregister_kretprobe(&lookup_probe);
 }
 
 
 
 
-#define AUTHOR "Carmine Mansueto mansueto.1646454@studenti.uniroma1.it"
+#define AUTHOR "Carmine Mansueto <mansueto.1646454@studenti.uniroma1.it>"
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR(AUTHOR);
 

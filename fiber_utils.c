@@ -16,13 +16,12 @@
 #include "headers/fiber_utils.h"	// for macros and function declarations
 #include "headers/ioctl.h"
 
-#define BITS 10
-// hashtable containing entries which are process structs
-DEFINE_HASHTABLE(processes, BITS);
+// hashtable containing entries which are process_t structs
+DEFINE_HASHTABLE(processes, HASHTABLE_BITS);
 //hash_init(processes);
 
  // global counter of the fibers
-static atomic_t fiber_ctr = ATOMIC_INIT(0);	// static because it has to be allocated when program starts and live for all program life
+static atomic_t fiber_ctr = ATOMIC_INIT(0);	// static because it has to be allocated when module inserted and live for all module life
 
 int convert_thread(pid_t* arg){
 	/* In arg I have to write:
@@ -81,7 +80,8 @@ int convert_thread(pid_t* arg){
 					printk(KERN_INFO "copy_to_user failed!\n");
 				return -1;
 			}
-			// allocating pt_regs of the fiber, to be putted into fiber_context_t of the fiber
+
+			// allocating pt_regs of the fiber
 			fib_ctx->regs = kmalloc(sizeof(struct pt_regs), GFP_KERNEL);
 			if(!fib_ctx->regs){
 				// kmalloc failed
@@ -91,16 +91,29 @@ int convert_thread(pid_t* arg){
 				kfree(fib_ctx);
 				return -1;
 			}
-			// copying thread status into fiber status
+
+			// creating the thread struct
+			thread = (struct thread_t*) kmalloc(sizeof(struct thread_t), GFP_KERNEL);
+			if(!thread){
+				// kmalloc failed
+				printk(KERN_INFO "kmalloc for thread_t failed!\n");
+				ret = copy_to_user((void*)arg, &(err), sizeof(int)); // I have to return -1 to UserSpace
+				if(ret!=0)
+					printk(KERN_INFO "copy_to_user failed!\n");
+				kfree(fib_ctx->regs);
+				kfree(fib_ctx);
+				kfree(thread);
+				return -1;
+			}
+
+			// copying thread status (pt_regs and FPU) into fiber status
 			memcpy(fib_ctx->regs, task_pt_regs(current), sizeof (struct pt_regs));
-			fib_ctx->fpu=NULL;
-			
 			fib_ctx->fpu = kzalloc(sizeof(struct fpu), GFP_KERNEL);
 			copy_fxregs_to_kernel(fib_ctx->fpu); // initializing the FPU of the fiber with the one of current
-			
-			//assigning id to the fiber atomically
+
+			// assigning id to the fiber atomically
 			smp_mb();
-			fib_ctx->fiber_id = (unsigned int) atomic_inc_return(&fiber_ctr);	//atomic_inc_return increments by 1 the atomic counter and returns the value of the counter as int, so I cast to unsigned int
+			fib_ctx->fiber_id = atomic_inc_return(&fiber_ctr);	//atomic_inc_return increments by 1 the atomic counter and returns the value of the counter as int
 			smp_mb();
 			
 			fib_ctx->thread = current_pid;
@@ -110,29 +123,23 @@ int convert_thread(pid_t* arg){
 			fib_ctx->fls.size = 0;
 			fib_ctx->fls.fls = NULL;
 			fib_ctx->fls.bitmask = NULL;
-
 			
 			//printk(KERN_INFO "Thread succesfully converted into Fiber, fiber_id=%u\n", fib_ctx->fiber_id);
-			
 
-			// adding the fiber to the hashtable of fibers of process
-			hash_add_rcu(tmp->fibers, &(fib_ctx->node), fib_ctx->fiber_id);
-			
-			// creating the thread struct
-			thread = kmalloc(sizeof(struct thread_t), GFP_KERNEL);
 			thread->process = tmp;
 			thread->selected_fiber = fib_ctx;
 			thread->thread_id = current_pid;
 			
+			// adding the fiber to the hashtable of fibers of process
+			hash_add_rcu(tmp->fibers, &(fib_ctx->node), fib_ctx->fiber_id);
 
 			//adding the thread to the hashtable of threads of process
 			hash_add_rcu(tmp->threads, &(thread->node), current_pid);
 			
 			atomic_inc(&(tmp->active_threads));	// incrementing the counter of threads of the process
-			
-			//printk(KERN_INFO "Structures in convert_thread set up!\n");
+
 			//writing the fiber id in arg to give it to the userspace
-			ret = copy_to_user((unsigned int*)arg, &(fib_ctx->fiber_id), sizeof(unsigned int)); // I have to return fiber_id to UserSpace
+			ret = copy_to_user((int*)arg, &(fib_ctx->fiber_id), sizeof(int)); // I have to return fiber_id to UserSpace
 			if(ret!=0){
 				printk(KERN_INFO "copy_to_user failed!\n");
 				return -1;
@@ -143,16 +150,32 @@ int convert_thread(pid_t* arg){
 	
 	// If I am here, there were not even the struct of the process of the current thread in my data structures
 	// I have to allocate everything!
-	process = kmalloc(sizeof(struct process_t), GFP_KERNEL);
-	thread = kmalloc(sizeof(struct thread_t), GFP_KERNEL);
-	
-	fib_ctx = kmalloc(sizeof(struct fiber_context_t), GFP_KERNEL);
+	process = (struct process_t*) kmalloc(sizeof(struct process_t), GFP_KERNEL);
+	if(!process){
+		printk(KERN_INFO "kmalloc for process_t failed!\n");
+		ret = copy_to_user((void*)arg, &(err), sizeof(int));  // I have to return -1 to UserSpace
+		if(ret!=0)
+			printk(KERN_INFO "copy_to_user failed!\n");
+		return -1;
+	}
+	thread = (struct thread_t*) kmalloc(sizeof(struct thread_t), GFP_KERNEL);
+	if(!thread){
+		printk(KERN_INFO "kmalloc for thread_t failed!\n");
+		ret = copy_to_user((void*)arg, &(err), sizeof(int));  // I have to return -1 to UserSpace
+		if(ret!=0)
+			printk(KERN_INFO "copy_to_user failed!\n");
+		kfree(process);
+		return -1;
+	}
+	fib_ctx = (struct fiber_context_t*) kmalloc(sizeof(struct fiber_context_t), GFP_KERNEL);
 	if(!fib_ctx){
 		// kmalloc failed
 		printk(KERN_INFO "kmalloc for fiber_context_t failed!\n");
 		ret = copy_to_user((void*)arg, &(err), sizeof(int));  // I have to return -1 to UserSpace
 		if(ret!=0)
 			printk(KERN_INFO "copy_to_user failed!\n");
+		kfree(process);
+		kfree(thread);
 		return -1;
 	}
 
@@ -164,6 +187,8 @@ int convert_thread(pid_t* arg){
 		if(ret!=0)
 			printk(KERN_INFO "copy_to_user failed!\n");
 		kfree(fib_ctx);
+		kfree(process);
+		kfree(thread);
 		return -1;
 	}
 
@@ -193,6 +218,7 @@ int convert_thread(pid_t* arg){
 	thread->process = process;
 	thread->selected_fiber = fib_ctx;
 	thread->thread_id = current_pid;
+
 	// initializing the fibers hashtable of process
 	hash_init(process->fibers);
 	// adding the fiber to the fibers hashtable of process
@@ -206,9 +232,8 @@ int convert_thread(pid_t* arg){
 	
 	atomic_set(&(process->active_threads), 1);	// initializing the atomic counter of threads
 	
-	//printk(KERN_INFO "Structures in convert_thread set up!\n");
 	//writing the fiber id in arg to give it to the userspace
-	ret = copy_to_user((unsigned int*)arg, &(fib_ctx->fiber_id), sizeof(unsigned int));  // I have to return fiber_id to UserSpace
+	ret = copy_to_user((int*)arg, &(fib_ctx->fiber_id), sizeof(int));  // I have to return fiber_id to UserSpace
 	if(ret!=0){
 		printk(KERN_INFO "copy_to_user failed!\n");
 		return -1;
@@ -216,13 +241,15 @@ int convert_thread(pid_t* arg){
 	return 0;
 }
 
-int create_fiber(struct fiber_arg_t* my_arg){
+int create_fiber(struct fiber_arg_t* arg){
 	
 	unsigned int err;
 	struct fiber_context_t* fib_ctx;
 	
 	struct process_t* tmp;
 	struct thread_t* tmp2;
+
+	struct fiber_arg_t my_arg;
 	
 	pid_t current_pid;		// thread id of the thread that called convert_thread
 	pid_t current_tgid;		// process id of the thread that called convert_thread
@@ -230,6 +257,8 @@ int create_fiber(struct fiber_arg_t* my_arg){
 	current_pid = current->pid;
 	current_tgid = current->tgid;
 	
+	copy_from_user(&my_arg, (const struct fiber_arg_t*) arg, sizeof(struct fiber_arg_t));
+
 	//printk(KERN_INFO "CREATE_FIBER: current_pid = %u | current_tgid = %u\n", current_pid, current_tgid);
 	
 	err=0;	//to be used with copy_to_user(), it is 0 because userspace expects the fiber_id (which is >0) or 0 if any error happened
@@ -247,13 +276,16 @@ int create_fiber(struct fiber_arg_t* my_arg){
 					if(!fib_ctx) return -1;
 					
 					fib_ctx->regs = kmalloc(sizeof (struct pt_regs), GFP_KERNEL);
-					if(!fib_ctx->regs) return -1;
+					if(!fib_ctx->regs){
+						kfree(fib_ctx);
+						return -1;
+					}
 					
 					memcpy(fib_ctx->regs, task_pt_regs(current), sizeof (struct pt_regs));
-					fib_ctx->regs->sp = (unsigned long)my_arg->stack;
-					fib_ctx->regs->bp = (unsigned long)my_arg->stack;
-					fib_ctx->regs->ip = (unsigned long)my_arg->routine;
-					fib_ctx->regs->di = (unsigned long)my_arg->args;
+					fib_ctx->regs->sp = (unsigned long)my_arg.stack;
+					fib_ctx->regs->bp = (unsigned long)my_arg.stack;
+					fib_ctx->regs->ip = (unsigned long)my_arg.routine;
+					fib_ctx->regs->di = (unsigned long)my_arg.args;
 					
 					fib_ctx->fpu = kzalloc(sizeof(struct fpu), GFP_KERNEL);
 					copy_fxregs_to_kernel(fib_ctx->fpu); // initializing the FPU of the fiber with the one of current
@@ -273,7 +305,9 @@ int create_fiber(struct fiber_arg_t* my_arg){
 					// adding the fiber to the hashtable of fibers of process
 					hash_add_rcu(tmp->fibers, &(fib_ctx->node), fib_ctx->fiber_id);
 					
-					my_arg->ret = fib_ctx->fiber_id;
+					my_arg.ret = fib_ctx->fiber_id;
+
+					copy_to_user((struct fiber_arg*) arg, (const struct fiber_arg_t*) &my_arg, sizeof(struct fiber_arg_t));
 					
 					//printk(KERN_INFO "Fiber succesfully created! fiber_id = %u\n", fib_ctx->fiber_id);
 
@@ -283,10 +317,9 @@ int create_fiber(struct fiber_arg_t* my_arg){
 		}
 	}
 	
-	// If I am here, the thread "current" did never called "convert_thread", so it cannot create fibers!
+	// If I am here, the thread "current" did never call "convert_thread", so it cannot create fibers!
 	printk(KERN_INFO "create_fiber not allowed. Thread did never call convert_thread!\n");
 	return -1;
-	
 }
 
 int switch_to(pid_t target_fib){
@@ -328,8 +361,14 @@ int switch_to(pid_t target_fib){
 								printk(KERN_INFO "could not acquire lock of target fiber! Some other is trying to acquire it!");
 								return -1;
 							}
-							if(tmp3->thread != 0){
-								printk(KERN_INFO "the fiber is occupied by another thread!");
+							if(tmp3->thread > 0){
+								printk(KERN_INFO "the target fiber is occupied by another thread!\n thread:%d | fiber:%d \n", tmp3->thread, tmp3->fiber_id);
+								spin_unlock(&tmp3->lock);
+								return -1;
+							}
+
+							if(tmp3->thread < 0){
+								printk(KERN_INFO "the target fiber is no longer available!\n");
 								spin_unlock(&tmp3->lock);
 								return -1;
 							}
@@ -340,11 +379,9 @@ int switch_to(pid_t target_fib){
 							spin_unlock(&tmp3->lock);
 							
 							// saving the state of the current thread into the old fiber
-							spin_lock(&old_fiber->lock);
-							old_fiber->thread = 0;	// now the old fiber is free
 							memcpy(old_fiber->regs, current_regs, sizeof(struct pt_regs));
 							copy_fxregs_to_kernel(old_fiber->fpu); // saving the FPU into the old fiber
-							spin_unlock(&old_fiber->lock);
+							old_fiber->thread = 0;	// now the old fiber is free
 							
 							// storing the state of the target fiber into the current thread
 							tmp2->selected_fiber = tmp3;
@@ -363,8 +400,9 @@ int switch_to(pid_t target_fib){
 		}
 	}
 	
-	printk(KERN_INFO "The current thread never called convert_thread! Cannot do switch_to!\n");
-	return -1;				
+	// If I am here, the thread "current" did never call "convert_thread", so it cannot switch_to!
+	printk(KERN_INFO "switch_to not allowed. Thread did never call convert_thread!\n");
+	return -1;			
 }
 
 int fls_alloc(unsigned long* arg){
@@ -586,7 +624,7 @@ int fls_set(struct fls_args_t* arg){
 }
 
 int kprobe_entry_handler(struct kprobe* kp, struct pt_regs* regs){
-	
+
 	int bkt;
 	
 	struct process_t* tmp;
@@ -603,7 +641,7 @@ int kprobe_entry_handler(struct kprobe* kp, struct pt_regs* regs){
 	current_tgid = current->tgid;
 	
 	current_regs = task_pt_regs(current);
-	
+
 	// going to check if the "current" thread called "convert_thread" at least once.
 	hash_for_each_possible_rcu(processes, tmp, node, current_tgid) {
 		if(tmp->process_id == current_tgid){
@@ -641,14 +679,11 @@ int kprobe_entry_handler(struct kprobe* kp, struct pt_regs* regs){
 				hash_for_each_possible_rcu(tmp->threads, tmp2, node, current_pid){
 					if(tmp2->thread_id == current_pid){
 						if(tmp2->selected_fiber!=NULL){
-							// Saving the context to the fiber
-							memcpy(tmp2->selected_fiber->regs, current_regs, sizeof(struct pt_regs));
-							copy_fxregs_to_kernel(tmp2->selected_fiber->fpu); // saving the FPU into the old fiber
-							spin_lock(&(tmp2->selected_fiber->lock));
-							tmp2->selected_fiber->thread=0;
-							spin_unlock(&(tmp2->selected_fiber->lock));
+							// if I am here, the thread that is dying was executing a fiber, the fiber has to be marked unavailable
+							tmp2->selected_fiber->thread=-1;
 						}
 					}
+					// actually destroying the thread
 					hash_del_rcu(&(tmp2->node));
 					kfree(tmp2);
 				}
