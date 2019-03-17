@@ -12,6 +12,7 @@
 #include <linux/hashtable.h>
 #include <linux/spinlock.h>
 #include <asm/fpu/internal.h>
+#include <linux/fs.h>
 
 #include "headers/fiber_utils.h"	// for macros and function declarations
 #include "headers/ioctl.h"
@@ -22,6 +23,9 @@ DEFINE_HASHTABLE(processes, HASHTABLE_BITS);
 
  // global counter of the fibers
 static atomic_t fiber_ctr = ATOMIC_INIT(0);	// static because it has to be allocated when module inserted and live for all module life
+
+// pid_entry of the "fibers" directory in /proc/PID
+struct pid_entry fiber_folder = DIR("fibers", S_IRUGO | S_IXUGO, fibdir_iops, fibdir_fops);   // DIR is a macro in proc/base.c which creates a pid_entry
 
 int convert_thread(pid_t* arg){
 	/* In arg I have to write:
@@ -623,7 +627,7 @@ int fls_set(struct fls_args_t* arg){
 	return -1;
 }
 
-int kprobe_entry_handler(struct kprobe* kp, struct pt_regs* regs){
+int doexit_entry_handler(struct kprobe* kp, struct pt_regs* regs){
 
 	int bkt;
 	
@@ -692,4 +696,119 @@ int kprobe_entry_handler(struct kprobe* kp, struct pt_regs* regs){
 		}
 	}	
 	return 0;
+}
+
+
+int kprobe_proc_readdir_handler(struct kretprobe_instance *p, struct pt_regs *regs){
+
+	// When "ls" is issued in /proc/PID or inside its subdirs, the proc_pident_readdir is called, we probed it and this is the entry_handler
+    // Here we check if we are in any PID directory, if yes we check if the process has some fibers, if yes we instanziate the "fibers" directory
+	// so that "ls" shows it
+    
+	struct file *file;
+    struct pid_entry *ents;
+    unsigned int nents;
+    unsigned long folder_pid;
+	struct process_t* tmp;
+	struct kret_data* krdata;
+
+	krdata = (struct kret_data*)p->data;
+	krdata->ents=NULL;
+
+    // view the SystemV x64 calling convention and proc_pident_readdir signature in /proc/base.c
+    file = (struct file *)regs->di;
+    ents = (struct pid_entry *)regs->dx;
+    nents = (unsigned int)regs->cx;
+
+	// print the directory name of the current directory in which "ls" has been issued
+	//printk(KERN_INFO "file->f_path.dentry->dname.name: %s\n", file->f_path.dentry->d_name.name);
+
+	// check if it is a PID directory
+    if(kstrtoul(file->f_path.dentry->d_name.name, 10, &folder_pid))
+        return 0;
+	
+	// check if process has fibers
+	hash_for_each_possible_rcu(processes, tmp, node, folder_pid){
+		if(tmp->process_id==folder_pid){
+			// The process has fibers!
+			// in pdata->ents we put all the current dir content + the "fibers" directory (the pid_entry statically initialized in this file)
+			krdata->ents = kmalloc(sizeof(struct pid_entry) * (nents + 1), GFP_KERNEL);
+			memcpy(krdata->ents, ents, sizeof(struct pid_entry) * nents);
+			memcpy(&krdata->ents[nents], &fiber_folder, sizeof(struct pid_entry));
+
+			// make cx and dx to point to data just allocated
+			regs->dx = (unsigned long)krdata->ents;
+			regs->cx = nents + 1;
+
+			return 0;
+		}
+	}
+	
+    return 0;
+}
+
+int kprobe_proc_post_readdir_handler(struct kretprobe_instance *p, struct pt_regs *regs){
+	// cleaning up
+    struct kret_data *krdata;
+    krdata = (struct kret_data *)p->data;
+    if (krdata->ents)
+        kfree(krdata->ents);
+    return 0;
+}
+
+int kprobe_proc_lookup_handler(struct kretprobe_instance *p, struct pt_regs *regs){
+	struct dentry *dentry;
+    struct pid_entry *ents;
+    unsigned int nents;
+    unsigned long folder_pid;
+	struct process_t* tmp;
+	struct kret_data* krdata;
+
+	krdata = (struct kret_data*)p->data;
+	krdata->ents=NULL;
+
+    // view the SystemV x64 calling convention and proc_pident_lookup signature in /proc/base.c
+    dentry = (struct dentry *)regs->si;
+    ents = (struct pid_entry *)regs->dx;
+    nents = (unsigned int)regs->cx;
+
+	printk(KERN_INFO "dentry->d_name.name: %s\n", dentry->d_name.name);
+
+    if (kstrtoul(dentry->d_name.name, 10, &folder_pid))
+        return 0;
+
+	// check if process has fibers
+	hash_for_each_possible_rcu(processes, tmp, node, folder_pid){
+		if(tmp->process_id==folder_pid){
+			// The process has fibers!
+			// in pdata->ents we put all the current dir content + the "fibers" directory (the pid_entry statically initialized in this file)
+			krdata->ents = kmalloc(sizeof(struct pid_entry) * (nents + 1), GFP_KERNEL);
+			memcpy(krdata->ents, ents, sizeof(struct pid_entry) * nents);
+			memcpy(&krdata->ents[nents], &fiber_folder, sizeof(struct pid_entry));
+
+			// make cx and dx to point to data just allocated
+			regs->dx = (unsigned long)krdata->ents;
+			regs->cx = nents + 1;
+
+			return 0;
+		}
+	}
+	
+    return 0;
+}
+
+int kprobe_proc_post_lookup_handler(struct kretprobe_instance *p, struct pt_regs *regs){
+	// cleaning up
+    struct kret_data *krdata;
+    krdata = (struct kret_data *)p->data;
+    if (krdata->ents)
+        kfree(krdata->ents);
+    return 0;
+}
+
+int fibdir_readdir(struct file *file, struct dir_context *ctx){
+	return 0;
+}
+struct dentry *fibdir_lookup(struct inode *dir, struct dentry *dentry, unsigned int flags){
+	return NULL;
 }

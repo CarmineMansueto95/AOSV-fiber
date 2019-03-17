@@ -3,6 +3,11 @@
 #define HASHTABLE_BITS 10
 #define MAX_FLS_INDEX 1024
 
+// used to free the stuff allocated by entry_handlers
+struct kret_data{
+  struct pid_entry *ents;
+};
+
 struct fls_struct_t{
 	unsigned long	size;
 	long long*		fls;		// actual FLS array
@@ -44,4 +49,62 @@ int fls_free(unsigned long* arg);
 int fls_get(struct fls_args_t* arg);
 int fls_set(struct fls_args_t* arg);
 
-int kprobe_entry_handler(struct kprobe* kp, struct pt_regs* regs);
+int doexit_entry_handler(struct kprobe* kp, struct pt_regs* regs);
+
+// *************************** PROC ********************************
+
+union proc_op {
+  int (*proc_get_link)(struct dentry *, struct path *);
+  int (*proc_show)(struct seq_file *m, struct pid_namespace *ns, struct pid *pid, struct task_struct *task);
+};
+
+struct pid_entry{
+  const char *name;
+  unsigned int len;
+  umode_t mode;
+  const struct inode_operations *iop;
+  const struct file_operations *fop;
+  union proc_op op;
+};
+
+#define NOD(NAME, MODE, IOP, FOP, OP) \
+  {                                   \
+    .name = (NAME),                   \
+    .len = sizeof(NAME) - 1,          \
+    .mode = MODE,                     \
+    .iop = IOP,                       \
+    .fop = FOP,                       \
+    .op = OP,                         \
+  }
+
+#define DIR(NAME, MODE, iops, fops) \
+  NOD(NAME, (S_IFDIR | (MODE)), &iops, &fops, {})
+
+int kprobe_proc_readdir_handler(struct kretprobe_instance *p, struct pt_regs *regs);
+int kprobe_proc_post_readdir_handler(struct kretprobe_instance *p, struct pt_regs *regs);
+int kprobe_proc_lookup_handler(struct kretprobe_instance *, struct pt_regs *);
+int kprobe_proc_post_lookup_handler(struct kretprobe_instance *, struct pt_regs *);
+
+int fibdir_readdir(struct file *file, struct dir_context *ctx);
+struct dentry *fibdir_lookup(struct inode *dir, struct dentry *dentry, unsigned int flags);
+
+
+// file_operations of /proc/PID/fibers
+struct file_operations fibdir_fops = {
+    .owner = THIS_MODULE,
+    .read = generic_read_dir,
+    .iterate_shared = fibdir_readdir,	// still to be implemented
+    .llseek = generic_file_llseek,
+};
+
+// inode_operations of /proc/PID/fibers
+struct inode_operations fibdir_iops = {
+    .lookup = fibdir_lookup,			// still to be implemented
+};
+
+/*
+// file_operations of any entry in /proc/PID/fibers
+struct file_operations fibentry_fops = {
+  .owner = THIS_MODULE,
+  .read = fibentry_read;    // still to be defined
+}*/

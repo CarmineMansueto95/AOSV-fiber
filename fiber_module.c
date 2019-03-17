@@ -120,69 +120,9 @@ long ioctl_commands(struct file* filp, unsigned int cmd, unsigned long arg){
 	return 0;
 }
 
-int kprobe_proc_readdir_handler(struct kretprobe_instance *p, struct pt_regs *regs){
-
-	// Quando viene fatto "ls" in /proc/PID o una sua sottodirectory, viene chiamata la proc_pident_readdir, che l'abbiamo probata e quindi finiamo in questa funzione
-    // Qui vediamo se siamo nella cartella PID, se si vediamo se il PID ha qualche fiber, se si allora istanziamo la cartella "fibers" in modo che
-	// verrà mostrata da "ls"
-    
-	struct file *file;
-    struct pid_entry *ents;
-    unsigned int nents;
-    unsigned long folder_pid;
-
-    file = (struct file *)regs->di;
-    ents = (struct pid_entry *)regs->dx;
-    nents = (unsigned int)regs->cx;
-
-	// stampo il nome della directory corrente in cui sono
-	printk(KERN_INFO "file->f_path.dentry->dname.name: %s\n", file->f_path.dentry->d_name.name);
-
-    if(kstrtoul(file->f_path.dentry->d_name.name, 10, &folder_pid))
-        return 0;
-
-    return 0;
-}
-
-int kprobe_proc_post_readdir_handler(struct kretprobe_instance *p, struct pt_regs *regs){
-	return 0;
-}
-
-int kprobe_proc_lookup_handler(struct kretprobe_instance *p, struct pt_regs *regs){
-	struct dentry *dentry;
-    struct pid_entry *ents;
-    unsigned int nents;
-
-    unsigned long folder_pid;
-
-    dentry = (struct dentry *)regs->si;
-    ents = (struct pid_entry *)regs->dx;
-    nents = (unsigned int)regs->cx;
-
-	printk(KERN_INFO "dentry->d_name.name: %s\n", dentry->d_name.name);
-
-    // se la directory in cui sono è il PID di un processo allora salvo il PID in folder_pid e vado avanti
-    if (kstrtoul(dentry->d_name.name, 10, &folder_pid))
-        return 0;
-
-    // creo la directory "fibers" all'interno della directory del PID del processo
-	/*
-    pdata->ents = kmalloc(sizeof(struct pid_entry) * (nents + 1), GFP_KERNEL);
-    memcpy(pdata->ents, ents, sizeof(struct pid_entry) * nents);
-    memcpy(&pdata->ents[nents], &fiber_folder, sizeof(struct pid_entry));
-
-    regs->dx = (unsigned long)pdata->ents;
-    regs->cx = nents + 1;
-	*/
-    return 0;
-}
-
-int kprobe_proc_post_lookup_handler(struct kretprobe_instance *p, struct pt_regs *regs){
-	return 0;
-}
 
 static struct kprobe my_kprobe = {
-	.pre_handler = kprobe_entry_handler,
+	.pre_handler = doexit_entry_handler,	// pre_handler: called before kernel calls do_exit
 	.symbol_name = "do_exit"
 };
 
@@ -278,7 +218,7 @@ static int __init mod_init(void){
 		printk(KERN_INFO "Could not register kretprobe!\n");
 		return -EFAULT;
 	}
-	
+
 	return 0;
 }
 
