@@ -8,7 +8,7 @@
 
 // used to free the stuff allocated by entry_handlers
 struct kret_data{
-  struct pid_entry *ents;
+ 	struct pid_entry *ents;
 };
 
 // declarations of module functions
@@ -25,8 +25,10 @@ extern int fls_free(unsigned long* arg);
 extern int fls_get(struct fls_args_t* arg);
 extern int fls_set(struct fls_args_t* arg);
 
+extern void get_proc_ksyms(void);
 extern int doexit_entry_handler(struct kprobe* kp, struct pt_regs* regs);
 extern int kprobe_proc_readdir_handler(struct kretprobe_instance *p, struct pt_regs *regs);
 extern int kprobe_proc_post_readdir_handler(struct kretprobe_instance *p, struct pt_regs *regs);
 extern int kprobe_proc_lookup_handler(struct kretprobe_instance *, struct pt_regs *);
 extern int kprobe_proc_post_lookup_handler(struct kretprobe_instance *, struct pt_regs *);
+extern ssize_t fibentry_read(struct file *file, char __user *buff, size_t count, loff_t *f_pos);

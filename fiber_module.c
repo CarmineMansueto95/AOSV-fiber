@@ -12,6 +12,7 @@
 #include <linux/hashtable.h>
 
 #include <linux/fs.h>
+#include <linux/kallsyms.h>
 
 #include "headers/fiber_module.h"	// for macros and function declarations
 #include "headers/ioctl.h"
@@ -218,6 +219,8 @@ static int __init mod_init(void){
 		printk(KERN_INFO "Could not register kretprobe!\n");
 		return -EFAULT;
 	}
+
+	get_proc_ksyms();
 
 	return 0;
 }
