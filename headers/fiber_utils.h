@@ -108,14 +108,14 @@ ssize_t fibentry_read(struct file *file, char __user *buff, size_t count, loff_t
 
 // inode_operations of /proc/PID/fibers
 struct inode_operations fibdir_iops = {
-  .lookup = fibdir_lookup,  // still to be implemented
+  .lookup = fibdir_lookup,
 };
 
 // file_operations of /proc/PID/fibers
 struct file_operations fibdir_fops = {
   .owner = THIS_MODULE,
   .read = generic_read_dir,
-  .iterate_shared = fibdir_readdir,	// still to be implemented
+  .iterate_shared = fibdir_readdir,
   .llseek = generic_file_llseek,
 };
 

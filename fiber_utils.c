@@ -22,9 +22,7 @@
 DEFINE_HASHTABLE(processes, HASHTABLE_BITS);
 //hash_init(processes);
 
-
-
-// pid_entry of the "fibers" directory in /proc/PID
+// pid_entry of the "fibers" directory to be exposed in /proc/PID
 struct pid_entry fiber_folder = DIR("fibers", S_IRUGO | S_IXUGO, fibdir_iops, fibdir_fops);   // DIR is a macro in proc/base.c which creates a pid_entry
 
 int convert_thread(pid_t* arg){
@@ -33,32 +31,26 @@ int convert_thread(pid_t* arg){
 	   - or 0 if the thread already called convert_thread
 	   - or -1 in case of error
 	*/
-	int ret;
-	int err;
-	int succ;
+	int ret, err, succ;
+    struct process_t *process, *tmp;
+    struct thread_t *thread, *tmp2;
 	struct fiber_context_t* fib_ctx;
-	struct thread_t* thread;
-	struct process_t* process;
-	
-	struct process_t* tmp;
-	struct thread_t* tmp2;
-	
-	pid_t current_pid;		// thread id of the thread that called convert_thread
-	pid_t current_tgid;		// process id of the thread that called convert_thread
-	
+	pid_t current_pid, current_tgid;		// pid and tgid of the thread that called convert_thread
+	struct process_t* process_f;
+
 	current_pid = current->pid;
 	current_tgid = current->tgid;
-	
-	//printk(KERN_INFO "CONVERT_THREAD: current_pid = %u | current_tgid = %u\n", current_pid, current_tgid);
-	
+
 	err=-1;	//to be used with copy_to_user()
 	succ=0; //to be used with copy_to_user()
-	
+	tmp = NULL;
+	process_f=NULL;
+
 	// Going to check if the current thread already called convert_thread
 	hash_for_each_possible_rcu(processes, tmp, node, current_tgid) {
 		if(tmp->process_id == current_tgid){
-			// I found the entry in the hashtable corresponding to the process of current thread
-			// I have to check if there is the struct thread corresponding to the current thread in its "threads" hashtable
+			process_f = tmp;
+
 			hash_for_each_possible_rcu(tmp->threads, tmp2, node, current_pid) {
 				if(tmp2->thread_id == current_pid){
 					// I found it! "current" already called convert_thread, so it is already a fiber. I have to return 0 to UserSpace
@@ -70,151 +62,50 @@ int convert_thread(pid_t* arg){
 					return 0;
 				}
 			}
-			
-			// If I am here, the process of current exists in my data structures but current threads does not exists
-			// So I have to allocate only the struct thread and the fiber context
-			
-			// allocating the fiber_context_t
-			fib_ctx = (struct fiber_context_t*) kmalloc(sizeof(struct fiber_context_t), GFP_KERNEL);
-			if(!fib_ctx){
-				// kmalloc failed
-				printk(KERN_INFO "kmalloc for fiber_context_t failed!\n");
-				ret = copy_to_user((void*)arg, &(err), sizeof(int)); // I have to return -1 to UserSpace
-				if(ret!=0)
-					printk(KERN_INFO "copy_to_user failed!\n");
-				return -1;
-			}
-
-			// allocating pt_regs of the fiber
-			fib_ctx->regs = kmalloc(sizeof(struct pt_regs), GFP_KERNEL);
-			if(!fib_ctx->regs){
-				// kmalloc failed
-				ret = copy_to_user((void*)arg,&(err),sizeof(int)); // I have to return -1 to UserSpace
-				if(ret!=0)
-					printk(KERN_INFO "copy_to_user failed!\n");
-				kfree(fib_ctx);
-				return -1;
-			}
-
-			// creating the thread struct
-			thread = (struct thread_t*) kmalloc(sizeof(struct thread_t), GFP_KERNEL);
-			if(!thread){
-				// kmalloc failed
-				printk(KERN_INFO "kmalloc for thread_t failed!\n");
-				ret = copy_to_user((void*)arg, &(err), sizeof(int)); // I have to return -1 to UserSpace
-				if(ret!=0)
-					printk(KERN_INFO "copy_to_user failed!\n");
-				kfree(fib_ctx->regs);
-				kfree(fib_ctx);
-				kfree(thread);
-				return -1;
-			}
-
-			// copying thread status (pt_regs and FPU) into fiber status
-			memcpy(fib_ctx->regs, task_pt_regs(current), sizeof (struct pt_regs));
-			fib_ctx->fpu = kzalloc(sizeof(struct fpu), GFP_KERNEL);
-			copy_fxregs_to_kernel(fib_ctx->fpu); // initializing the FPU of the fiber with the one of current
-
-			// assigning id to the fiber atomically
-			smp_mb();
-			fib_ctx->fiber_id = atomic_inc_return(&(tmp->fiber_ctr));	//atomic_inc_return increments by 1 the atomic counter and returns the value of the counter as int
-			smp_mb();
-			
-			fib_ctx->thread = current_pid;
-			spin_lock_init(&fib_ctx->lock);
-
-			//Empty FLS
-			fib_ctx->fls.size = 0;
-			fib_ctx->fls.fls = NULL;
-			fib_ctx->fls.bitmask = NULL;
-
-			snprintf(fib_ctx->name, 10, "%d", fib_ctx->fiber_id);
-			
-			printk(KERN_INFO "Thread succesfully converted into Fiber, fiber_id=%u\n", fib_ctx->fiber_id);
-
-			thread->process = tmp;
-			thread->selected_fiber = fib_ctx;
-			thread->thread_id = current_pid;
-			
-			// adding the fiber to the hashtable of fibers of process
-			hash_add_rcu(tmp->fibers, &(fib_ctx->node), fib_ctx->fiber_id);
-
-			//adding the thread to the hashtable of threads of process
-			hash_add_rcu(tmp->threads, &(thread->node), current_pid);
-			
-			atomic_inc(&(tmp->active_threads));	// incrementing the counter of threads of the process
-			atomic_inc(&(tmp->active_fibers));  // incrementing the counter of fibers of the process
-
-			//writing the fiber id in arg to give it to the userspace
-			ret = copy_to_user((int*)arg, &(fib_ctx->fiber_id), sizeof(int)); // I have to return fiber_id to UserSpace
-			if(ret!=0){
-				printk(KERN_INFO "copy_to_user failed!\n");
-				return -1;
-			}
-			return 0;
 		}
 	}
-	
-	// If I am here, there were not even the struct of the process of the current thread in my data structures
-	// I have to allocate everything!
-	process = (struct process_t*) kmalloc(sizeof(struct process_t), GFP_KERNEL);
-	if(!process){
-		printk(KERN_INFO "kmalloc for process_t failed!\n");
-		ret = copy_to_user((void*)arg, &(err), sizeof(int));  // I have to return -1 to UserSpace
-		if(ret!=0)
-			printk(KERN_INFO "copy_to_user failed!\n");
-		return -1;
-	}
-	process->process_id = current_tgid;
-	hash_add_rcu(processes, &(process->node), current_tgid); // adding the struct process to the global hashtable
-	atomic_set(&(process->fiber_ctr), 0);
 
-	thread = (struct thread_t*) kmalloc(sizeof(struct thread_t), GFP_KERNEL);
-	if(!thread){
-		printk(KERN_INFO "kmalloc for thread_t failed!\n");
-		ret = copy_to_user((void*)arg, &(err), sizeof(int));  // I have to return -1 to UserSpace
-		if(ret!=0)
-			printk(KERN_INFO "copy_to_user failed!\n");
-		kfree(process);
-		return -1;
-	}
+	// allocating the fiber_context_t
 	fib_ctx = (struct fiber_context_t*) kmalloc(sizeof(struct fiber_context_t), GFP_KERNEL);
 	if(!fib_ctx){
 		// kmalloc failed
 		printk(KERN_INFO "kmalloc for fiber_context_t failed!\n");
-		ret = copy_to_user((void*)arg, &(err), sizeof(int));  // I have to return -1 to UserSpace
+		ret = copy_to_user((void*)arg, &(err), sizeof(int)); // I have to return -1 to UserSpace
 		if(ret!=0)
 			printk(KERN_INFO "copy_to_user failed!\n");
-		kfree(process);
-		kfree(thread);
 		return -1;
 	}
 
-	// allocating pt_regs of the fiber, to be putted into fiber_context_t of the fiber
+	// allocating pt_regs of the fiber
 	fib_ctx->regs = kmalloc(sizeof(struct pt_regs), GFP_KERNEL);
 	if(!fib_ctx->regs){
 		// kmalloc failed
-		ret = copy_to_user((void*)arg,&(err),sizeof(int));  // I have to return -1 to UserSpace
+		ret = copy_to_user((void*)arg,&(err),sizeof(int)); // I have to return -1 to UserSpace
 		if(ret!=0)
 			printk(KERN_INFO "copy_to_user failed!\n");
 		kfree(fib_ctx);
-		kfree(process);
+		return -1;
+	}
+
+	// creating the thread struct
+	thread = (struct thread_t*) kmalloc(sizeof(struct thread_t), GFP_KERNEL);
+	if(!thread){
+		// kmalloc failed
+		printk(KERN_INFO "kmalloc for thread_t failed!\n");
+		ret = copy_to_user((void*)arg, &(err), sizeof(int)); // I have to return -1 to UserSpace
+		if(ret!=0)
+			printk(KERN_INFO "copy_to_user failed!\n");
+		kfree(fib_ctx->regs);
+		kfree(fib_ctx);
 		kfree(thread);
 		return -1;
 	}
 
-	// copying thread status into fiber status
+	// copying thread status (pt_regs and FPU) into fiber status
 	memcpy(fib_ctx->regs, task_pt_regs(current), sizeof (struct pt_regs));
-	fib_ctx->fpu=NULL;
-	
 	fib_ctx->fpu = kzalloc(sizeof(struct fpu), GFP_KERNEL);
 	copy_fxregs_to_kernel(fib_ctx->fpu); // initializing the FPU of the fiber with the one of current
-	
-	//assigning id to the fiber atomically
-	smp_mb();
-	fib_ctx->fiber_id = (unsigned int) atomic_inc_return(&(process->fiber_ctr));	//atomic_inc_return increments by 1 the atomic counter and returns the value of the counter as int, so I cast to unsigned int
-	smp_mb();
-	
+			
 	fib_ctx->thread = current_pid;
 	spin_lock_init(&fib_ctx->lock);
 
@@ -223,28 +114,62 @@ int convert_thread(pid_t* arg){
 	fib_ctx->fls.fls = NULL;
 	fib_ctx->fls.bitmask = NULL;
 
-	snprintf(fib_ctx->name, 10, "%d", fib_ctx->fiber_id);
-	
-	printk(KERN_INFO "Thread succesfully converted into Fiber, fiber_id=%u\n", fib_ctx->fiber_id);
-
-	thread->process = process;
 	thread->selected_fiber = fib_ctx;
 	thread->thread_id = current_pid;
 
-	// initializing the fibers hashtable of process
-	hash_init(process->fibers);
-	// adding the fiber to the fibers hashtable of process
-	hash_add_rcu(process->fibers, &(fib_ctx->node), fib_ctx->fiber_id);
-	// initializing the threads hashtable of process
-	hash_init(process->threads);
-	//adding the thread to the hashtable of threads of process
-	hash_add_rcu(process->threads, &(thread->node), current_pid);
-	
+	if(process_f!=NULL){
+		thread->process = process_f;
+		atomic_inc(&(process_f->active_threads));	// incrementing the counter of threads of the process
+		atomic_inc(&(process_f->active_fibers));  // incrementing the counter of fibers of the process
+
+		// assigning id to the fiber atomically
+		smp_mb();
+		fib_ctx->fiber_id = atomic_inc_return(&(process_f->fiber_ctr));	//atomic_inc_return increments by 1 the atomic counter and returns the value of the counter as int
+		smp_mb();
+
+		snprintf(fib_ctx->name, 10, "%d", fib_ctx->fiber_id);
+
+		hash_add_rcu(process_f->fibers, &(fib_ctx->node), fib_ctx->fiber_id); // adding the fiber to the hashtable of fibers of process
+		hash_add_rcu(process_f->threads, &(thread->node), current_pid); //adding the thread to the hashtable of threads of process
+
+		printk(KERN_INFO "Fiber succesfully converted! fiber_id = %u\n", fib_ctx->fiber_id);
+
+
+		//writing the fiber id in arg to give it to the userspace
+		ret = copy_to_user((int*)arg, &(fib_ctx->fiber_id), sizeof(int)); // I have to return fiber_id to UserSpace
+		if(ret!=0){
+			printk(KERN_INFO "copy_to_user failed!\n");
+			return -1;
+		}
+		return 0;
+	}
+
+	process = (struct process_t*) kmalloc(sizeof(struct process_t), GFP_KERNEL);
+	process->process_id = current_tgid;
 	atomic_set(&(process->active_threads), 1); // initializing the atomic counter of threads
 	atomic_set(&(process->active_fibers), 1);  // initializing the atomic counter of fibers
-	
+	atomic_set(&(process->fiber_ctr), 0);
+
+	//assigning id to the fiber atomically
+	smp_mb();
+	fib_ctx->fiber_id = (unsigned int) atomic_inc_return(&(process->fiber_ctr));	//atomic_inc_return increments by 1 the atomic counter and returns the value of the counter as int, so I cast to unsigned int
+	smp_mb();
+	snprintf(fib_ctx->name, 10, "%d", fib_ctx->fiber_id);
+
+	thread->process = process;
+
+	hash_add_rcu(processes, &(process->node), current_tgid); // adding the struct process to the global hashtable
+
+
+	hash_init(process->fibers); // initializing the fibers hashtable of process
+	hash_add_rcu(process->fibers, &(fib_ctx->node), fib_ctx->fiber_id); // adding the fiber to the fibers hashtable of process
+	hash_init(process->threads); // initializing the threads hashtable of process
+	hash_add_rcu(process->threads, &(thread->node), current_pid); //adding the thread to the hashtable of threads of process
+
+	printk(KERN_INFO "Fiber succesfully converted! fiber_id = %u\n", fib_ctx->fiber_id);
+
 	//writing the fiber id in arg to give it to the userspace
-	ret = copy_to_user((int*)arg, &(fib_ctx->fiber_id), sizeof(int));  // I have to return fiber_id to UserSpace
+	ret = copy_to_user((int*)arg, &(fib_ctx->fiber_id), sizeof(int)); // I have to return fiber_id to UserSpace
 	if(ret!=0){
 		printk(KERN_INFO "copy_to_user failed!\n");
 		return -1;
@@ -255,22 +180,16 @@ int convert_thread(pid_t* arg){
 int create_fiber(struct fiber_arg_t* arg){
 	
 	unsigned int err;
-	struct fiber_context_t* fib_ctx;
-	
 	struct process_t* tmp;
 	struct thread_t* tmp2;
-
+	struct fiber_context_t* fib_ctx;
 	struct fiber_arg_t my_arg;
-	
-	pid_t current_pid;		// thread id of the thread that called convert_thread
-	pid_t current_tgid;		// process id of the thread that called convert_thread
-	
+	pid_t current_pid, current_tgid;		// pid and tgid of the thread that called convert_thread
+
 	current_pid = current->pid;
 	current_tgid = current->tgid;
 	
 	copy_from_user(&my_arg, (const struct fiber_arg_t*) arg, sizeof(struct fiber_arg_t));
-
-	//printk(KERN_INFO "CREATE_FIBER: current_pid = %u | current_tgid = %u\n", current_pid, current_tgid);
 	
 	err=0;	//to be used with copy_to_user(), it is 0 because userspace expects the fiber_id (which is >0) or 0 if any error happened
 	
@@ -317,10 +236,9 @@ int create_fiber(struct fiber_arg_t* arg){
 					
 					// adding the fiber to the hashtable of fibers of process
 					hash_add_rcu(tmp->fibers, &(fib_ctx->node), fib_ctx->fiber_id);
-					
-					my_arg.ret = fib_ctx->fiber_id;
-
 					atomic_inc(&(tmp->active_fibers));  // incrementing the counter of fibers of the process
+
+					my_arg.ret = fib_ctx->fiber_id;
 
 					copy_to_user((struct fiber_arg*) arg, (const struct fiber_arg_t*) &my_arg, sizeof(struct fiber_arg_t));
 					
@@ -341,20 +259,14 @@ int switch_to(pid_t target_fib){
 	
 	struct process_t* tmp;
 	struct thread_t* tmp2;
-	struct fiber_context_t* tmp3;
-	struct fiber_context_t* old_fiber;
-	
+	struct fiber_context_t *tmp3, *old_fiber;
 	struct pt_regs* current_regs;
-	
-	pid_t current_pid;		// thread id of the thread that called convert_thread
-	pid_t current_tgid;		// process id of the thread that called convert_thread
+	pid_t current_pid, current_tgid;	// pid and tgid of the thread that called convert_thread
 	
 	current_pid = current->pid;
 	current_tgid = current->tgid;
 	
 	current_regs = task_pt_regs(current);
-
-	//printk(KERN_INFO "SWITCH_TO: current_pid = %u | current_tgid = %u | switch_to_fib %u\n", current_pid, current_tgid, target_fib);
 	
 	// going to check if the "current" thread called "convert_thread" at least once, otherwise it cannot do switch_to!
 	hash_for_each_possible_rcu(processes, tmp, node, current_tgid) {
@@ -709,15 +621,15 @@ int doexit_entry_handler(struct kprobe* kp, struct pt_regs* regs){
 	return 0;
 }
 
+/*BEGIN OF PROC UTILS*/
 
 int kprobe_proc_readdir_handler(struct kretprobe_instance *p, struct pt_regs *regs){
 
 	// When "ls" is issued in /proc/PID or inside its subdirs, the proc_pident_readdir is called, we probed it and this is the entry_handler
     // Here we check if we are in any PID directory, if yes we check if the process has some fibers, if yes we instanziate the "fibers" directory
-	// so that "ls" shows it
     
-	struct file *file;
-    struct pid_entry *ents;
+	struct file* file;
+    struct pid_entry* ents;
     unsigned int nents;
     unsigned long folder_pid;
 	struct process_t* tmp;
@@ -727,8 +639,8 @@ int kprobe_proc_readdir_handler(struct kretprobe_instance *p, struct pt_regs *re
 	krdata->ents=NULL;
 
     // view the SystemV x64 calling convention and proc_pident_readdir signature in /proc/base.c
-    file = (struct file *)regs->di;
-    ents = (struct pid_entry *)regs->dx;
+    file = (struct file*)regs->di;
+    ents = (struct pid_entry*)regs->dx;
     nents = (unsigned int)regs->cx;
 
 	// print the directory name of the current directory in which "ls" has been issued
@@ -736,7 +648,7 @@ int kprobe_proc_readdir_handler(struct kretprobe_instance *p, struct pt_regs *re
 
 	// check if it is a PID directory
     if(kstrtoul(file->f_path.dentry->d_name.name, 10, &folder_pid))
-        return 0;
+        return 0; // we're not in /proc/PID, nothing to do here
 	
 	// check if process has fibers
 	hash_for_each_possible_rcu(processes, tmp, node, folder_pid){
@@ -754,7 +666,6 @@ int kprobe_proc_readdir_handler(struct kretprobe_instance *p, struct pt_regs *re
 			return 0;
 		}
 	}
-	
     return 0;
 }
 
@@ -769,8 +680,8 @@ int kprobe_proc_post_readdir_handler(struct kretprobe_instance *p, struct pt_reg
 
 int kprobe_proc_lookup_handler(struct kretprobe_instance *p, struct pt_regs *regs){
 
-	struct dentry *dentry;
-    struct pid_entry *ents;
+	struct dentry* dentry;
+    struct pid_entry* ents;
     unsigned int nents;
     unsigned long folder_pid;
 	struct process_t* tmp;
@@ -780,14 +691,14 @@ int kprobe_proc_lookup_handler(struct kretprobe_instance *p, struct pt_regs *reg
 	krdata->ents=NULL;
 
     // view the SystemV x64 calling convention and proc_pident_lookup signature in /proc/base.c
-    dentry = (struct dentry *)regs->si;
-    ents = (struct pid_entry *)regs->dx;
+    dentry = (struct dentry*)regs->si;
+    ents = (struct pid_entry*)regs->dx;
     nents = (unsigned int)regs->cx;
 
 	//printk(KERN_INFO "dentry->d_name.name: %s\n", dentry->d_name.name);
 
     if (kstrtoul(dentry->d_name.name, 10, &folder_pid))
-        return 0;
+        return 0; // we're not in /proc/PID, nothing to do here
 
 	// check if process has fibers
 	hash_for_each_possible_rcu(processes, tmp, node, folder_pid){
@@ -805,7 +716,6 @@ int kprobe_proc_lookup_handler(struct kretprobe_instance *p, struct pt_regs *reg
 			return 0;
 		}
 	}
-	
     return 0;
 }
 
@@ -827,97 +737,82 @@ void get_proc_ksyms(){
     ksym_proc_pident_readdir = (void *) kallsyms_lookup_name("proc_pident_readdir");
 }
 
-
 int fibdir_readdir(struct file *file, struct dir_context *ctx){
 
-	int bkt;
+	// Called when "ls" is issued in /proc/PID/fibers directory
 
 	unsigned long folder_pid;
     struct process_t* tmp;
     struct pid_entry* ents;
     struct fiber_context_t* fiber;
-    int num_fibers;
+    int num_fibers, bkt, ret_val;
     unsigned int nents;
-    int ret_val;
 
+	// if ../ is a PID go on
     if (kstrtoul(file->f_path.dentry->d_parent->d_name.name, 10, &folder_pid))
         return 0;
 
 	hash_for_each_possible_rcu(processes, tmp, node, folder_pid){
-		if(tmp->process_id == folder_pid){
-		    
-		    num_fibers = atomic_read(&(tmp->active_fibers));
-		    if(num_fibers==0) return 0;
+		// no need to check if tmp has fibers, we are in /proc/PID/fibers so for sure tmp has fibers
+	    num_fibers = atomic_read(&(tmp->active_fibers));
+	    //if(num_fibers==0) return 0;
 
-		    ents = kmalloc(sizeof(struct pid_entry) * num_fibers, GFP_KERNEL);
-		    nents = 0;
+	    ents = kmalloc(sizeof(struct pid_entry) * num_fibers, GFP_KERNEL);
+	    nents = 0;
 
-		    hash_for_each_rcu(tmp->fibers, bkt, fiber, node){
-		        ents[nents].name = fiber->name;
-		        ents[nents].len = strlen(fiber->name);
-		        ents[nents].mode = S_IFREG | S_IRUGO;
-		        ents[nents].iop = NULL;
-		        ents[nents].fop = &fibentry_fops;
+	    hash_for_each_rcu(tmp->fibers, bkt, fiber, node){
+	        ents[nents].name = fiber->name;
+	        ents[nents].len = strlen(fiber->name);
+	        ents[nents].mode = S_IFREG | S_IRUGO;
+	        ents[nents].iop = NULL;
+	        ents[nents].fop = &fibentry_fops;
+	        nents++;
+	    }
 
-		        nents++;
-		    }
-
-		    // once pid_entries have been created, I have to put them into /proc/PID/fibers (as we did modifying the dx and cx registers in kretprobe handlers)
-		    ret_val = ksym_proc_pident_readdir(file, ctx, ents, nents);
-
-		    kfree(ents);
-
-		    return ret_val;
-		}
+	    // once pid_entries have been created, I have to put them into /proc/PID/fibers
+	    ret_val = ksym_proc_pident_readdir(file, ctx, ents, nents);
+	    kfree(ents);
+	    return ret_val;
 	}
-
 	return 0;
 }
 
 struct dentry *fibdir_lookup(struct inode *dir, struct dentry *dentry, unsigned int flags){
 
-	int bkt;
-
 	unsigned long folder_pid;
     struct process_t* tmp;
     struct pid_entry* ents;
     struct fiber_context_t* fiber;
-    unsigned int nents;
+    unsigned int nents, bkt, num_fibers;
     struct dentry *ret_val;
 
-    int num_fibers;
-
+	// if ../ is a PID go on
     if (kstrtoul(dentry->d_parent->d_name.name, 10, &folder_pid))
         return NULL;
 
 	hash_for_each_possible_rcu(processes, tmp, node, folder_pid){
-		if(tmp->process_id == folder_pid){
+		// no need to check if tmp has fibers, we are in /proc/PID/fibers so for sure tmp has fibers
+		num_fibers = atomic_read(&(tmp->active_fibers));
+		//if(num_fibers==0) return 0;
 
-			num_fibers = atomic_read(&(tmp->active_fibers));
-			if(num_fibers==0) return 0;
+		ents = kmalloc(sizeof(struct pid_entry) * num_fibers, GFP_KERNEL);
+   		nents = 0;
 
-			ents = kmalloc(sizeof(struct pid_entry) * num_fibers, GFP_KERNEL);
-    		nents = 0;
+   		hash_for_each_rcu(tmp->fibers, bkt, fiber, node){
+	        ents[nents].name = fiber->name;
+	        ents[nents].len = strlen(fiber->name);
+	        ents[nents].mode = S_IFREG | S_IRUGO;
+	        ents[nents].iop = NULL;
+	        ents[nents].fop = &fibentry_fops;
+	        nents++;
+	    }
 
-    		hash_for_each_rcu(tmp->fibers, bkt, fiber, node){
-		        ents[nents].name = fiber->name;
-		        ents[nents].len = strlen(fiber->name);
-		        ents[nents].mode = S_IFREG | S_IRUGO;
-		        ents[nents].iop = NULL;
-		        ents[nents].fop = &fibentry_fops;
-
-		        nents++;
-		    }
-
-		    // once pid_entries have been created, I have to put them into /proc/PID/fibers (as we did modifying the dx and cx registers in kretprobe handlers)
-    		ret_val = ksym_proc_pident_lookup(dir, dentry, ents, nents);
-
-    		kfree(ents);
-
-    		return ret_val;
-    	}
-    }
-    return 0;
+	    // once pid_entries have been created, I have to put them into /proc/PID/fibers
+   		ret_val = ksym_proc_pident_lookup(dir, dentry, ents, nents);
+   		kfree(ents);
+   		return ret_val;
+   	}
+	return 0;
 }
 
 ssize_t fibentry_read(struct file *file, char __user *buff, size_t count, loff_t *f_pos){
