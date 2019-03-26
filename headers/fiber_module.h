@@ -6,6 +6,8 @@
 #define START_MINOR 0	// MINOR number to start when allocating minors to device
 #define NUM_MINORS 1	// # of minor numbers required by the device
 
+extern spinlock_t cnvtr_lock;
+
 // used to free the stuff allocated by entry_handlers
 struct kret_data{
  	struct pid_entry *ents;

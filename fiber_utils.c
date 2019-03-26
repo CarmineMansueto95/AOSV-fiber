@@ -21,6 +21,7 @@
 // hashtable containing entries which are process_t structs
 DEFINE_HASHTABLE(processes, HASHTABLE_BITS);
 //hash_init(processes);
+spinlock_t cnvtr_lock;
 
 // pid_entry of the "fibers" directory to be exposed in /proc/PID
 struct pid_entry fiber_folder = DIR("fibers", S_IRUGO | S_IXUGO, fibdir_iops, fibdir_fops);   // DIR is a macro in proc/base.c which creates a pid_entry
@@ -32,6 +33,7 @@ int convert_thread(pid_t* arg){
 	   - or -1 in case of error
 	*/
 	int ret, err, succ;
+	unsigned long flags; //for spin_lock_irqsave and spin_lock_irqrestore
     struct process_t *process, *tmp;
     struct thread_t *thread, *tmp2;
 	struct fiber_context_t* fib_ctx;
@@ -45,13 +47,14 @@ int convert_thread(pid_t* arg){
 	succ=0; //to be used with copy_to_user() when "current" already called convert_thread
 	tmp = NULL;
 	process_f=NULL;
+	process=NULL;
 
-	// acquire lock
+	spin_lock_irqsave(&cnvtr_lock, flags);
 
 	// Going to check if the current thread already called convert_thread
 	hash_for_each_possible_rcu(processes, tmp, node, current_tgid) {
 		if(tmp->process_id == current_tgid){
-			// release lock
+			spin_unlock_irqrestore(&cnvtr_lock, flags);
 			process_f = tmp; // process found, I store it into process_f
 
 			hash_for_each_possible_rcu(tmp->threads, tmp2, node, current_pid) {
@@ -66,6 +69,22 @@ int convert_thread(pid_t* arg){
 				}
 			}
 		}
+	}
+
+	if(process_f==NULL){
+		// I am the first thread who call convert_thread, I have to instantiate the process struct and some critical field before others can use it
+		process = (struct process_t*) kmalloc(sizeof(struct process_t), GFP_ATOMIC); // cannot sleep while holding a lock, so GFP_ATOMIC
+		process->process_id = current_tgid;
+		atomic_set(&(process->active_threads), 0); // initializing the atomic counter of threads
+		atomic_set(&(process->active_fibers), 0);  // initializing the atomic counter of fibers
+		atomic_set(&(process->fiber_ctr), 0); // initializing the atomic fiber_id counter
+
+		hash_init(process->threads); // initializing the threads hashtable of process
+		hash_init(process->fibers); // initializing the fibers hashtable of process
+
+		hash_add_rcu(processes, &(process->node), current_tgid); // adding the struct process to the global hashtable
+
+		spin_unlock_irqrestore(&cnvtr_lock, flags);
 	}
 
 	// allocating the fiber_context_t
@@ -100,7 +119,6 @@ int convert_thread(pid_t* arg){
 			printk(KERN_INFO "copy_to_user failed!\n");
 		kfree(fib_ctx->regs);
 		kfree(fib_ctx);
-		kfree(thread);
 		return -1;
 	}
 
@@ -137,7 +155,6 @@ int convert_thread(pid_t* arg){
 		smp_mb();
 		fib_ctx->fiber_id = atomic_inc_return(&(process_f->fiber_ctr));	//atomic_inc_return increments by 1 the atomic counter and returns the value of the counter as int
 		smp_mb();
-
 		snprintf(fib_ctx->name, 10, "%d", fib_ctx->fiber_id);
 
 		hash_add_rcu(process_f->fibers, &(fib_ctx->node), fib_ctx->fiber_id); // adding the fiber to the hashtable of fibers of process
@@ -154,11 +171,9 @@ int convert_thread(pid_t* arg){
 		return 0;
 	}
 
-	process = (struct process_t*) kmalloc(sizeof(struct process_t), GFP_KERNEL);
-	process->process_id = current_tgid;
-	atomic_set(&(process->active_threads), 1); // initializing the atomic counter of threads
-	atomic_set(&(process->active_fibers), 1);  // initializing the atomic counter of fibers
-	atomic_set(&(process->fiber_ctr), 0); // initializing the atomic fiber_id counter
+	thread->process = process;
+	atomic_inc(&(process->active_threads));
+	atomic_inc(&(process->active_fibers));
 
 	//assigning id to the fiber atomically
 	smp_mb();
@@ -166,16 +181,8 @@ int convert_thread(pid_t* arg){
 	smp_mb();
 	snprintf(fib_ctx->name, 10, "%d", fib_ctx->fiber_id);
 
-	thread->process = process;
-
-	hash_add_rcu(processes, &(process->node), current_tgid); // adding the struct process to the global hashtable
-
-	hash_init(process->fibers); // initializing the fibers hashtable of process
 	hash_add_rcu(process->fibers, &(fib_ctx->node), fib_ctx->fiber_id); // adding the fiber to the fibers hashtable of process
-	hash_init(process->threads); // initializing the threads hashtable of process
 	hash_add_rcu(process->threads, &(thread->node), current_pid); //adding the thread to the hashtable of threads of process
-
-	// release lock
 
 	//printk(KERN_INFO "Fiber succesfully converted! fiber_id = %u\n", fib_ctx->fiber_id);
 
@@ -260,7 +267,7 @@ int create_fiber(struct fiber_arg_t* arg){
 
 					copy_to_user((struct fiber_arg*) arg, (const struct fiber_arg_t*) &my_arg, sizeof(struct fiber_arg_t));
 					
-					printk(KERN_INFO "Fiber succesfully created! fiber_id = %u\n", fib_ctx->fiber_id);
+					//printk(KERN_INFO "Fiber succesfully created! fiber_id = %u\n", fib_ctx->fiber_id);
 
 					return 0;
 				}
