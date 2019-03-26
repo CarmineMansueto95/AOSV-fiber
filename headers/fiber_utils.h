@@ -29,7 +29,14 @@ struct fiber_context_t{
   struct fls_struct_t fls;    // Fiber Local Storage
   struct hlist_node node;
 
-  char name[10];    // needed to give a name to the corresponding proc entry (file)
+  // proc fields
+  char name[10]; // needed to give a name to the corresponding proc entry (file)
+  void (*entry_point)(void*); // NULL if fiber created with convert_thread()
+  pid_t creator; // pid of the thread which created the fiber via convert_thread() or create_fiber()
+  int activations; // # of successful activations
+  int f_activations; // # of unsuccessful activations
+  unsigned long long execution_time;
+  unsigned long long last_execution;
 };
 
 struct thread_t{

@@ -42,14 +42,17 @@ int convert_thread(pid_t* arg){
 	current_tgid = current->tgid;
 
 	err=-1;	//to be used with copy_to_user()
-	succ=0; //to be used with copy_to_user()
+	succ=0; //to be used with copy_to_user() when "current" already called convert_thread
 	tmp = NULL;
 	process_f=NULL;
+
+	// acquire lock
 
 	// Going to check if the current thread already called convert_thread
 	hash_for_each_possible_rcu(processes, tmp, node, current_tgid) {
 		if(tmp->process_id == current_tgid){
-			process_f = tmp;
+			// release lock
+			process_f = tmp; // process found, I store it into process_f
 
 			hash_for_each_possible_rcu(tmp->threads, tmp2, node, current_pid) {
 				if(tmp2->thread_id == current_pid){
@@ -117,9 +120,17 @@ int convert_thread(pid_t* arg){
 	thread->selected_fiber = fib_ctx;
 	thread->thread_id = current_pid;
 
+	fib_ctx->entry_point = NULL;
+	fib_ctx->creator = current_pid;
+	fib_ctx->activations = 1;
+	fib_ctx->f_activations = 0;
+	fib_ctx->execution_time = 0;
+	fib_ctx->last_execution = (((current->utime) + (current->stime)) / 1000000); // in ms
+
 	if(process_f!=NULL){
+		// I do not have to instantiate a process structure, it already exists
 		thread->process = process_f;
-		atomic_inc(&(process_f->active_threads));	// incrementing the counter of threads of the process
+		atomic_inc(&(process_f->active_threads)); // incrementing the counter of threads of the process
 		atomic_inc(&(process_f->active_fibers));  // incrementing the counter of fibers of the process
 
 		// assigning id to the fiber atomically
@@ -132,8 +143,7 @@ int convert_thread(pid_t* arg){
 		hash_add_rcu(process_f->fibers, &(fib_ctx->node), fib_ctx->fiber_id); // adding the fiber to the hashtable of fibers of process
 		hash_add_rcu(process_f->threads, &(thread->node), current_pid); //adding the thread to the hashtable of threads of process
 
-		printk(KERN_INFO "Fiber succesfully converted! fiber_id = %u\n", fib_ctx->fiber_id);
-
+		//printk(KERN_INFO "Fiber succesfully converted! fiber_id = %u\n", fib_ctx->fiber_id);
 
 		//writing the fiber id in arg to give it to the userspace
 		ret = copy_to_user((int*)arg, &(fib_ctx->fiber_id), sizeof(int)); // I have to return fiber_id to UserSpace
@@ -148,7 +158,7 @@ int convert_thread(pid_t* arg){
 	process->process_id = current_tgid;
 	atomic_set(&(process->active_threads), 1); // initializing the atomic counter of threads
 	atomic_set(&(process->active_fibers), 1);  // initializing the atomic counter of fibers
-	atomic_set(&(process->fiber_ctr), 0);
+	atomic_set(&(process->fiber_ctr), 0); // initializing the atomic fiber_id counter
 
 	//assigning id to the fiber atomically
 	smp_mb();
@@ -160,13 +170,14 @@ int convert_thread(pid_t* arg){
 
 	hash_add_rcu(processes, &(process->node), current_tgid); // adding the struct process to the global hashtable
 
-
 	hash_init(process->fibers); // initializing the fibers hashtable of process
 	hash_add_rcu(process->fibers, &(fib_ctx->node), fib_ctx->fiber_id); // adding the fiber to the fibers hashtable of process
 	hash_init(process->threads); // initializing the threads hashtable of process
 	hash_add_rcu(process->threads, &(thread->node), current_pid); //adding the thread to the hashtable of threads of process
 
-	printk(KERN_INFO "Fiber succesfully converted! fiber_id = %u\n", fib_ctx->fiber_id);
+	// release lock
+
+	//printk(KERN_INFO "Fiber succesfully converted! fiber_id = %u\n", fib_ctx->fiber_id);
 
 	//writing the fiber id in arg to give it to the userspace
 	ret = copy_to_user((int*)arg, &(fib_ctx->fiber_id), sizeof(int)); // I have to return fiber_id to UserSpace
@@ -232,6 +243,13 @@ int create_fiber(struct fiber_arg_t* arg){
 					fib_ctx->fls.fls = NULL;
 					fib_ctx->fls.bitmask = NULL;
 
+					fib_ctx->entry_point = (void*)fib_ctx->regs->ip;
+					fib_ctx->creator = current_pid;
+					fib_ctx->activations = 0;
+					fib_ctx->f_activations = 0;
+					fib_ctx->execution_time = 0;
+					fib_ctx->last_execution = (((current->utime) + (current->stime)) / 1000000); // in ms
+
 					snprintf(fib_ctx->name, 10, "%d", fib_ctx->fiber_id);
 					
 					// adding the fiber to the hashtable of fibers of process
@@ -285,35 +303,39 @@ int switch_to(pid_t target_fib){
 							// The fiber I want to switch to exists! It is tmp3
 							
 							if(!spin_trylock(&tmp3->lock)){
+								tmp3->f_activations +=1;
 								printk(KERN_INFO "could not acquire lock of target fiber! Some other is trying to acquire it!");
 								return -1;
 							}
 							if(tmp3->thread > 0){
-								printk(KERN_INFO "the target fiber is occupied by another thread!\n thread:%d | fiber:%d \n", tmp3->thread, tmp3->fiber_id);
+								tmp3->f_activations +=1;
 								spin_unlock(&tmp3->lock);
+								printk(KERN_INFO "the target fiber is occupied by another thread!\n thread:%d | fiber:%d \n", tmp3->thread, tmp3->fiber_id);
 								return -1;
 							}
 
 							if(tmp3->thread < 0){
-								printk(KERN_INFO "the target fiber is no longer available!\n");
 								spin_unlock(&tmp3->lock);
+								printk(KERN_INFO "the target fiber is no longer available!\n");
 								return -1;
 							}
 							
 							// If i am here, I can steal the fiber
 							tmp3->thread = current_pid;
-							
+							tmp3->activations +=1;
+							tmp2->selected_fiber = tmp3;
 							spin_unlock(&tmp3->lock);
 							
 							// saving the state of the current thread into the old fiber
 							memcpy(old_fiber->regs, current_regs, sizeof(struct pt_regs));
 							copy_fxregs_to_kernel(old_fiber->fpu); // saving the FPU into the old fiber
+							old_fiber->execution_time += (((current->utime) + (current->stime)) / 1000000) - old_fiber->last_execution;
 							old_fiber->thread = 0;	// now the old fiber is free
-							
+
 							// storing the state of the target fiber into the current thread
-							tmp2->selected_fiber = tmp3;
 							memcpy(current_regs, tmp3->regs, sizeof(struct pt_regs));
 							copy_kernel_to_fxregs(&(tmp3->fpu->state.fxsave));
+							tmp3->last_execution = (((current->utime) + (current->stime)) / 1000000);
 							return 0;
 						
 						}
@@ -816,5 +838,57 @@ struct dentry *fibdir_lookup(struct inode *dir, struct dentry *dentry, unsigned 
 }
 
 ssize_t fibentry_read(struct file *file, char __user *buff, size_t count, loff_t *f_pos){
+
+	// when a read is issued on a fiber descriptor, I write its stuff in buf, then with copy_to_user I
+	// send the written stuff in buff
+
+	char buf[512];
+	size_t bytes_written, offset;
+	unsigned long tgid, fib_id;
+	struct process_t* process;
+	struct fiber_context_t* fiber;
+
+	// getting the id of the target fiber
+	if(kstrtoul(file->f_path.dentry->d_name.name, 10, &fib_id))
+        return 0;
+
+	// getting the tgid of the process holding the target fiber
+    if(kstrtoul(file->f_path.dentry->d_parent->d_parent->d_name.name, 10, &tgid))
+        return 0; 
+
+	hash_for_each_possible_rcu(processes, process, node, tgid){
+		if(process->process_id == tgid){
+			hash_for_each_possible_rcu(process->fibers, fiber, node, fib_id){
+				if(fiber->fiber_id == fib_id){
+					
+					// fiber found, getting its status and writing it into buf
+					bytes_written = snprintf(buf, 512,
+											"Fiber status: %s\n"
+											"Running thread: %d (0:WAITING, -1:TERMINATED)\n"
+                                            "Entry Point: 0x%lx\n" 	//lx for unsigned long
+                                            "Creator PID: %d\n"
+                                            "Successful Activations: %d\n"
+                                            "Unsuccessful Activations: %d\n"
+                                            "Total Execution Time: %llu ms\n",	//llu for unsigned long long
+                    				        ((fiber->thread > 0) ? "RUNNING" : "WAITING/TERMINATED"),
+											fiber->thread,
+                             				(unsigned long)fiber->entry_point,
+                             				fiber->creator,
+											fiber->activations,
+                             				fiber->f_activations,
+                             				fiber->execution_time);
+					if (*f_pos >= bytes_written)
+						return 0;
+
+					offset = (count < bytes_written) ? count : bytes_written;
+					if (copy_to_user(buff, buf, offset))
+						return -EFAULT;
+
+					*f_pos += offset;
+					return offset;
+				}
+			}
+		}
+	}
 	return 0;
 }
