@@ -145,8 +145,6 @@ static int __init mod_init(void){
 	
 	int ret;
 
-	printk(KERN_INFO "Loading module...\n");
-
 	//Allocating device MAJOR number and first MINOR number
 	//The first parameter will contain, after the execution, the MAJOR and the first MINOR
 	ret = alloc_chrdev_region(&fib_cdevt, START_MINOR, NUM_MINORS, DEVICE_NAME);
@@ -196,9 +194,11 @@ static int __init mod_init(void){
 		printk(KERN_INFO "Could not create the device '%s' for udev!\n", DEVICE_NAME);
 		device_destroy(fib_cdevclass, fib_cdevt);
 	}
-	
-	printk(KERN_INFO "Device correctly installed into the system!\n");
-	
+
+	//printk(KERN_INFO "Device correctly installed into the system!\n");
+
+	spin_lock_init(&cnvtr_lock); // initializing the convert_thread() spinlock defined in "fiber_utils.c"
+
 	// Registering kprobe for do_exit()
 	ret = register_kprobe(&my_kprobe);
 	if(ret){
@@ -240,9 +240,6 @@ static void __exit mod_exit(void){
 	unregister_kretprobe(&readdir_probe);
 	unregister_kretprobe(&lookup_probe);
 }
-
-
-
 
 #define AUTHOR "Carmine Mansueto <mansueto.1646454@studenti.uniroma1.it>"
 MODULE_LICENSE("GPL");

@@ -21,6 +21,9 @@
 // hashtable containing entries which are process_t structs
 DEFINE_HASHTABLE(processes, HASHTABLE_BITS);
 //hash_init(processes);
+
+// needed if convert_thread is called concurrently by threads of the same process
+// prevents the creation of two "struct process_t"
 spinlock_t cnvtr_lock;
 
 // pid_entry of the "fibers" directory to be exposed in /proc/PID
@@ -33,11 +36,11 @@ int convert_thread(pid_t* arg){
 	   - or -1 in case of error
 	*/
 	int ret, err, succ;
-	unsigned long flags; //for spin_lock_irqsave and spin_lock_irqrestore
+	unsigned long flags; //for spin_lock_irqsave and spin_unlock_irqrestore
     struct process_t *process, *tmp;
     struct thread_t *thread, *tmp2;
 	struct fiber_context_t* fib_ctx;
-	pid_t current_pid, current_tgid;		// pid and tgid of the thread that called convert_thread
+	pid_t current_pid, current_tgid; // pid and tgid of the thread that called convert_thread
 	struct process_t* process_f;
 
 	current_pid = current->pid;
@@ -45,9 +48,8 @@ int convert_thread(pid_t* arg){
 
 	err=-1;	//to be used with copy_to_user()
 	succ=0; //to be used with copy_to_user() when "current" already called convert_thread
-	tmp = NULL;
-	process_f=NULL;
-	process=NULL;
+	tmp=NULL;
+	process_f = process = NULL;
 
 	spin_lock_irqsave(&cnvtr_lock, flags);
 
@@ -146,7 +148,7 @@ int convert_thread(pid_t* arg){
 	fib_ctx->last_execution = (((current->utime) + (current->stime)) / 1000000); // in ms
 
 	if(process_f!=NULL){
-		// I do not have to instantiate a process structure, it already exists
+		// the process structure already exists, it is process_f
 		thread->process = process_f;
 		atomic_inc(&(process_f->active_threads)); // incrementing the counter of threads of the process
 		atomic_inc(&(process_f->active_fibers));  // incrementing the counter of fibers of the process
@@ -171,6 +173,7 @@ int convert_thread(pid_t* arg){
 		return 0;
 	}
 
+	// If I am here, process structure did not exist
 	thread->process = process;
 	atomic_inc(&(process->active_threads));
 	atomic_inc(&(process->active_fibers));

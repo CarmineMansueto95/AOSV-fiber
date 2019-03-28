@@ -6,7 +6,7 @@
 #define START_MINOR 0	// MINOR number to start when allocating minors to device
 #define NUM_MINORS 1	// # of minor numbers required by the device
 
-extern spinlock_t cnvtr_lock;
+extern spinlock_t cnvtr_lock;	// it is defined in "fiber_utils.c", but I have to initialize it into "fiber_module.c"
 
 // used to free the stuff allocated by entry_handlers
 struct kret_data{
@@ -17,7 +17,7 @@ struct kret_data{
 int dev_open (struct inode* i, struct file* f);
 long ioctl_commands(struct file* filp, unsigned int cmd, unsigned long arg);
 
-// Declarations of utils functions (defined in "fiber_utils.c")
+// utils functions (declared in "fiber.utils.h" and defined in "fiber_utils.c")
 extern int convert_thread(pid_t* arg);
 extern int create_fiber(struct fiber_arg_t* arg);
 extern int switch_to(pid_t target_fib);

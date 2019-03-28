@@ -11,10 +11,10 @@ struct fls_struct_t{
 
 struct process_t{
   pid_t process_id;
+  atomic_t active_threads;  // number of threads palying with fibers
+  atomic_t active_fibers;   // number of fibers of the process
+  atomic_t fiber_ctr;       // counter for fiber_id
   struct hlist_node node;
-  atomic_t active_threads;
-  atomic_t active_fibers;
-  atomic_t fiber_ctr;
 
   DECLARE_HASHTABLE(threads,10);
   DECLARE_HASHTABLE(fibers,10);
@@ -25,7 +25,7 @@ struct fiber_context_t{
   struct pt_regs* regs;   // status of the main registers
   struct fpu* fpu;    // status of the floating point unit
   pid_t thread;   // pid of the thread running the fiber, 0 if fiber is free, -1 if fiber is no longer available
-  spinlock_t lock;
+  spinlock_t lock;  // for handling concurrency in switch_to()
   struct fls_struct_t fls;    // Fiber Local Storage
   struct hlist_node node;
 
@@ -40,9 +40,9 @@ struct fiber_context_t{
 };
 
 struct thread_t{
-  struct process_t* process;
-  struct fiber_context_t* selected_fiber;
   pid_t thread_id;
+  struct process_t* process;
+  struct fiber_context_t* selected_fiber; // the fiber this thread is running
   struct hlist_node node;
 };
 
@@ -129,5 +129,5 @@ struct file_operations fibdir_fops = {
 // file_operations of any entry in /proc/PID/fibers
 struct file_operations fibentry_fops = {
   .owner = THIS_MODULE,
-  .read = fibentry_read,  // still to be defined
+  .read = fibentry_read,
 };
