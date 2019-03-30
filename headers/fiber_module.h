@@ -3,18 +3,18 @@
 // declarations for device stuff
 #define DEVICE_NAME "fiber"
 #define CLASS_NAME "fiberc"
-#define START_MINOR 0	// MINOR number to start when allocating minors to device
-#define NUM_MINORS 1	// # of minor numbers required by the device
+#define START_MINOR 0		// MINOR number to start when allocating minors to device
+#define NUM_MINORS 1		// # of minor numbers required by the device
 
 extern spinlock_t cnvtr_lock;	// it is defined in "fiber_utils.c", but I have to initialize it into "fiber_module.c"
 
-// used to free the stuff allocated by entry_handlers
+// used to free the stuff allocated by entry_handlers of proc kretprobes
 struct kret_data{
- 	struct pid_entry *ents;
+	struct pid_entry *ents;
 };
 
 // declarations of module functions
-int dev_open (struct inode* i, struct file* f);
+int dev_open(struct inode* i, struct file* f);
 long ioctl_commands(struct file* filp, unsigned int cmd, unsigned long arg);
 
 // utils functions (declared in "fiber.utils.h" and defined in "fiber_utils.c")

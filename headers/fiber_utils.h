@@ -1,49 +1,49 @@
 #include "module_shared.h"
 
 #define HASHTABLE_BITS 10
-#define MAX_FLS_INDEX 1024
+#define MAX_FLS_INDEX 1024	// each fiber has 1024 long long entries as FLS
 
 struct fls_struct_t{
-  unsigned long size;
-  long long* fls;   // actual FLS array
-  unsigned long* bitmask; // FLS bitmask
+	unsigned long size;
+	long long* fls; // actual FLS array
+	unsigned long* bitmask; // FLS bitmask
 };
 
 struct process_t{
-  pid_t process_id;
-  atomic_t active_threads;  // number of threads palying with fibers
-  atomic_t active_fibers;   // number of fibers of the process
-  atomic_t fiber_ctr;       // counter for fiber_id
-  struct hlist_node node;
+	pid_t process_id;			// tgid of a process
+	atomic_t active_threads;	// number of threads of the process playing with fibers
+	atomic_t active_fibers;		// number of fibers of the process
+	atomic_t fiber_ctr;			// counter for fiber_ids
+	struct hlist_node node;
 
-  DECLARE_HASHTABLE(threads,10);
-  DECLARE_HASHTABLE(fibers,10);
+	DECLARE_HASHTABLE(threads,HASHTABLE_BITS);
+	DECLARE_HASHTABLE(fibers,HASHTABLE_BITS);
 };
 
 struct fiber_context_t{
-  pid_t fiber_id;   // id of the fiber
-  struct pt_regs* regs;   // status of the main registers
-  struct fpu* fpu;    // status of the floating point unit
-  pid_t thread;   // pid of the thread running the fiber, 0 if fiber is free, -1 if fiber is no longer available
-  spinlock_t lock;  // for handling concurrency in switch_to()
-  struct fls_struct_t fls;    // Fiber Local Storage
-  struct hlist_node node;
+	pid_t fiber_id;
+	struct pt_regs* regs;	// status of the main registers
+	struct fpu* fpu;		// status of the floating point unit
+	pid_t thread;			// pid of the thread running the fiber, 0 if fiber is free, -1 if fiber is no longer available
+	spinlock_t lock;		// for handling concurrency in switch_to()
+	struct fls_struct_t fls;	// Fiber Local Storage
+	struct hlist_node node;
 
-  // proc fields
-  char name[10]; // needed to give a name to the corresponding proc entry (file)
-  void (*entry_point)(void*); // NULL if fiber created with convert_thread()
-  pid_t creator; // pid of the thread which created the fiber via convert_thread() or create_fiber()
-  int activations; // # of successful activations
-  int f_activations; // # of unsuccessful activations
-  unsigned long long execution_time;
-  unsigned long long last_execution;
+	// proc fields
+	char name[10];				// needed to give a name to the corresponding proc entry (file)
+	void (*entry_point)(void*);	// NULL if fiber created with convert_thread()
+	pid_t creator;				// pid of the thread which created the fiber via convert_thread() or create_fiber()
+	int activations;			// # of successful activations
+	int f_activations;			// # of unsuccessful activations
+	unsigned long long execution_time;
+	unsigned long long last_execution;
 };
 
 struct thread_t{
-  pid_t thread_id;
-  struct process_t* process;
-  struct fiber_context_t* selected_fiber; // the fiber this thread is running
-  struct hlist_node node;
+	pid_t thread_id;
+	struct process_t* process;
+	struct fiber_context_t* selected_fiber; // the fiber this thread is running
+	struct hlist_node node;
 };
 
 int convert_thread(pid_t* arg);
@@ -63,23 +63,23 @@ int doexit_entry_handler(struct kprobe* kp, struct pt_regs* regs);
 #define KRETDATA
 // used to free the stuff allocated by entry_handlers
 struct kret_data{
-  struct pid_entry *ents;
+	struct pid_entry *ents;
 };
 #endif
 
 // needed just to define a struct pid_entry
 union proc_op {
-  int (*proc_get_link)(struct dentry *, struct path *);
-  int (*proc_show)(struct seq_file *m, struct pid_namespace *ns, struct pid *pid, struct task_struct *task);
+	int (*proc_get_link)(struct dentry *, struct path *);
+	int (*proc_show)(struct seq_file *m, struct pid_namespace *ns, struct pid *pid, struct task_struct *task);
 };
 
 struct pid_entry{
-  const char *name;
-  unsigned int len;
-  umode_t mode;
-  const struct inode_operations *iop;
-  const struct file_operations *fop;
-  union proc_op op;
+	const char *name;
+	unsigned int len;
+	umode_t mode;
+	const struct inode_operations *iop;
+	const struct file_operations *fop;
+	union proc_op op;
 };
 
 // needed to instantiate a pid_entry
@@ -112,22 +112,21 @@ struct dentry *fibdir_lookup(struct inode *dir, struct dentry *dentry, unsigned 
 
 ssize_t fibentry_read(struct file *file, char __user *buff, size_t count, loff_t *f_pos);
 
-
 // inode_operations of /proc/PID/fibers
 struct inode_operations fibdir_iops = {
-  .lookup = fibdir_lookup,
+	.lookup = fibdir_lookup,
 };
 
 // file_operations of /proc/PID/fibers
 struct file_operations fibdir_fops = {
-  .owner = THIS_MODULE,
-  .read = generic_read_dir,
-  .iterate_shared = fibdir_readdir,
-  .llseek = generic_file_llseek,
+	.owner = THIS_MODULE,
+	.read = generic_read_dir,	// simply returns -EISDIR (https://www.tldp.org/LDP/lki/lki-3.html)
+	.iterate_shared = fibdir_readdir,	// "iterate" and "iterate_shared" are called when "ls" is performed, we use "iterate_shared" because it can be performed by multiple calls simultaneously
 };
 
 // file_operations of any entry in /proc/PID/fibers
 struct file_operations fibentry_fops = {
-  .owner = THIS_MODULE,
-  .read = fibentry_read,
+	.owner = THIS_MODULE,
+	.read = fibentry_read,
+	.llseek = generic_file_llseek,
 };
