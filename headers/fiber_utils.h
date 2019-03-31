@@ -1,6 +1,6 @@
 #include "module_shared.h"
 
-#define HASHTABLE_BITS 10
+#define HASHTABLE_BITS 10	// the hashtable will have 2^10=1024 buckets, each bucket is an hlist
 #define MAX_FLS_INDEX 1024	// each fiber has 1024 long long entries as FLS
 
 struct fls_struct_t{

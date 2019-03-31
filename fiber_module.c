@@ -5,14 +5,14 @@
 
 #include <linux/kprobes.h>
 
-#include <asm-generic/barrier.h>	// needed for smp_bp()
+#include <asm-generic/barrier.h>	// needed for smp_mb()
 #include <linux/atomic.h>
 #include <linux/uaccess.h>			// needed for copy_to_user()
-#include <linux/slab.h>				// needed for kmalloc() and kfree()
+#include <linux/slab.h>				// needed for kmalloc(), kzalloc() and kfree()
 #include <linux/hashtable.h>
 
-#include <linux/fs.h>
-#include <linux/kallsyms.h>
+#include <linux/fs.h>				// needed for proc
+#include <linux/kallsyms.h>			// needed for proc
 
 #include "headers/fiber_module.h"	// for macros and function declarations
 #include "headers/ioctl.h"
@@ -20,7 +20,7 @@
 static struct cdev*		fib_cdev;
 static struct class*	fib_cdevclass;
 static struct device*	fib_dev;
-static dev_t			fib_cdevt;	// for the return of alloc_chrdev_region. This will contain the MAJOR number and the first MINOR number (16 bit for each).
+static dev_t			fib_cdevt;		// for the return of alloc_chrdev_region. This will contain the MAJOR number and the first MINOR number (16 bit for each).
 
 //file operations for the device
 const struct file_operations fops = {
@@ -36,26 +36,21 @@ static char* set_permission(struct device *dev, umode_t *mode){
 	return NULL; /* could override /dev name here too */
 }
 
-
 int dev_open(struct inode* i, struct file* f){
 	//printk(KERN_INFO "Device opened correctly!\n");
 	return 0;
 }
 
-
 long ioctl_commands(struct file* filp, unsigned int cmd, unsigned long arg){
-	
+
 	int ret;
-	
 	pid_t switchto_fib_id;
-	
+
 	// going to parse the passed command
 	switch(cmd){
-		
 		case IOCTL_TEST:
 			printk(KERN_INFO "ioctl issued with IOCTL_TEST command! Nothing to do here...\n");
 			break;
-			
 		case IOCTL_CONVERT_THREAD:
 			ret = convert_thread((pid_t*) arg);
 			if(ret != 0){
@@ -63,7 +58,6 @@ long ioctl_commands(struct file* filp, unsigned int cmd, unsigned long arg){
 				return -1;
 			}
 			break;
-		
 		case IOCTL_CREATE_FIBER:
 			ret = create_fiber((struct fiber_arg_t*)arg);
 			if(ret != 0){
@@ -71,7 +65,6 @@ long ioctl_commands(struct file* filp, unsigned int cmd, unsigned long arg){
 				return -1;
 			}
 			break;
-		
 		case IOCTL_SWITCH_TO:
 			copy_from_user(&switchto_fib_id, (const pid_t*) arg, sizeof(unsigned int));
 			ret = switch_to(switchto_fib_id);
@@ -80,7 +73,6 @@ long ioctl_commands(struct file* filp, unsigned int cmd, unsigned long arg){
 				return -1;
 			}
 			break;
-		
 		case IOCTL_FLS_ALLOC:
 			ret = fls_alloc((unsigned long*) arg);
 			if(ret != 0){
@@ -88,7 +80,6 @@ long ioctl_commands(struct file* filp, unsigned int cmd, unsigned long arg){
 				return -1;
 			}
 			break;
-		
 		case IOCTL_FLS_FREE:
 			ret = fls_free((unsigned long*) arg);
 			if(ret!=0){
@@ -96,7 +87,6 @@ long ioctl_commands(struct file* filp, unsigned int cmd, unsigned long arg){
 				return -1;
 			}
 			break;
-
 		case IOCTL_FLS_GET:
 			ret = fls_get((struct fls_args_t*) arg);
 			if(ret!=0){
@@ -104,7 +94,6 @@ long ioctl_commands(struct file* filp, unsigned int cmd, unsigned long arg){
 				return -1;
 			}
 			break;
-
 		case IOCTL_FLS_SET:
 			ret = fls_set((struct fls_args_t*) arg);
 			if(ret!=0){
@@ -112,15 +101,12 @@ long ioctl_commands(struct file* filp, unsigned int cmd, unsigned long arg){
 				return -1;
 			}
 			break;
-
 		default:
 			printk(KERN_INFO "Wrong command!!!\n");
 			return -1;
 	}
-
 	return 0;
 }
-
 
 static struct kprobe my_kprobe = {
 	.pre_handler = doexit_entry_handler,	// pre_handler: called before kernel calls do_exit
@@ -142,7 +128,7 @@ static struct kretprobe lookup_probe = {
 };
 
 static int __init mod_init(void){
-	
+
 	int ret;
 
 	//Allocating device MAJOR number and first MINOR number
@@ -152,12 +138,13 @@ static int __init mod_init(void){
 		printk(KERN_INFO "Could not allocate MAJOR and MINOR!\n");
 		return -EFAULT;
 	}
-	printk("The MAJOR number of the device is %d and the MINOR number is %d\n", MAJOR(fib_cdevt), MINOR(fib_cdevt));
+	//printk("The MAJOR number of the device is %d and the MINOR number is %d\n", MAJOR(fib_cdevt), MINOR(fib_cdevt));
 
 	//Allocating a struct cdev for the device
 	fib_cdev = cdev_alloc();
 	if(!fib_cdev){
 		printk(KERN_INFO "cdev_alloc() failed: could not allocate memory for the cdev struct!\n");
+		unregister_chrdev_region(fib_cdevt, NUM_MINORS);
 		return -EFAULT;
 	}
 
@@ -169,6 +156,8 @@ static int __init mod_init(void){
 	if(ret<0){
 		printk(KERN_INFO "Could not register device into the system!\n");
 		cdev_del(fib_cdev);
+		unregister_chrdev_region(fib_cdevt, NUM_MINORS);
+		return -EFAULT;
 	}
 
 	/*
@@ -183,9 +172,11 @@ static int __init mod_init(void){
 		printk(KERN_INFO "Could not create the class for the device!\n");
 		class_unregister(fib_cdevclass);
 		class_destroy(fib_cdevclass);
+		cdev_del(fib_cdev);
+		unregister_chrdev_region(fib_cdevt, NUM_MINORS);
 		return -EFAULT;
 	}
-	
+
 	//Setting the device permissions to open it from Userspace
 	fib_cdevclass -> devnode = set_permission;
 
@@ -193,6 +184,10 @@ static int __init mod_init(void){
 	if(IS_ERR(fib_dev)){
 		printk(KERN_INFO "Could not create the device '%s' for udev!\n", DEVICE_NAME);
 		device_destroy(fib_cdevclass, fib_cdevt);
+		class_unregister(fib_cdevclass);
+		class_destroy(fib_cdevclass);
+		cdev_del(fib_cdev);
+		unregister_chrdev_region(fib_cdevt, NUM_MINORS);
 	}
 
 	//printk(KERN_INFO "Device correctly installed into the system!\n");
@@ -229,7 +224,7 @@ static int __init mod_init(void){
 static void __exit mod_exit(void){
 
 	printk(KERN_INFO "Removing module...\n");
-	
+
 	//Cleaning up all the stuff this module allocated
 	device_destroy(fib_cdevclass, fib_cdevt);
 	class_unregister(fib_cdevclass);

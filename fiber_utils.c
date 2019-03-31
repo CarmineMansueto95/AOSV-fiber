@@ -8,7 +8,7 @@
 #include <asm-generic/barrier.h>	// needed for smp_bp()
 #include <linux/atomic.h>
 #include <linux/uaccess.h>			// needed for copy_to_user()
-#include <linux/slab.h>				// needed for kmalloc() and kfree()
+#include <linux/slab.h>				// needed for kmalloc(), kzalloc() and kfree()
 #include <linux/hashtable.h>
 #include <linux/spinlock.h>
 #include <asm/fpu/internal.h>
@@ -23,7 +23,7 @@ DEFINE_HASHTABLE(processes, HASHTABLE_BITS);
 //hash_init(processes);
 
 // needed if convert_thread is called concurrently by threads of the same process
-// prevents the creation of two "struct process_t"
+// prevents the creation of two "struct process_t" of the same process
 spinlock_t cnvtr_lock;
 
 // pid_entry of the "fibers" directory to be exposed in /proc/PID
@@ -128,7 +128,7 @@ int convert_thread(pid_t* arg){
 	memcpy(fib_ctx->regs, task_pt_regs(current), sizeof (struct pt_regs));
 	fib_ctx->fpu = kzalloc(sizeof(struct fpu), GFP_KERNEL);
 	copy_fxregs_to_kernel(fib_ctx->fpu); // initializing the FPU of the fiber with the one of current
-			
+
 	fib_ctx->thread = current_pid;
 	spin_lock_init(&fib_ctx->lock);
 
@@ -199,7 +199,7 @@ int convert_thread(pid_t* arg){
 }
 
 int create_fiber(struct fiber_arg_t* arg){
-	
+
 	unsigned int err;
 	struct process_t* tmp;
 	struct thread_t* tmp2;
@@ -209,11 +209,11 @@ int create_fiber(struct fiber_arg_t* arg){
 
 	current_pid = current->pid;
 	current_tgid = current->tgid;
-	
+
 	copy_from_user(&my_arg, (const struct fiber_arg_t*) arg, sizeof(struct fiber_arg_t));
-	
+
 	err=0;	//to be used with copy_to_user(), it is 0 because userspace expects the fiber_id (which is >0) or 0 if any error happened
-	
+
 	// going to check if the "current" thread called "convert_thread" at least once, otherwise it cannot create new fibers!
 	hash_for_each_possible_rcu(processes, tmp, node, current_tgid) {
 		if(tmp->process_id == current_tgid){
@@ -222,29 +222,29 @@ int create_fiber(struct fiber_arg_t* arg){
 			hash_for_each_possible_rcu(tmp->threads, tmp2, node, current_pid) {
 				if(tmp2->thread_id == current_pid){
 					// I found it! "current" already called convert_thread, so it is already a fiber. So it can create a fiber!
-					
+
 					fib_ctx = kmalloc(sizeof(struct fiber_context_t), GFP_KERNEL);
 					if(!fib_ctx) return -1;
-					
+
 					fib_ctx->regs = kmalloc(sizeof (struct pt_regs), GFP_KERNEL);
 					if(!fib_ctx->regs){
 						kfree(fib_ctx);
 						return -1;
 					}
-					
+
 					memcpy(fib_ctx->regs, task_pt_regs(current), sizeof (struct pt_regs));
 					fib_ctx->regs->sp = (unsigned long)my_arg.stack;
 					fib_ctx->regs->bp = (unsigned long)my_arg.stack;
 					fib_ctx->regs->ip = (unsigned long)my_arg.routine;
 					fib_ctx->regs->di = (unsigned long)my_arg.args;
-					
+
 					fib_ctx->fpu = kzalloc(sizeof(struct fpu), GFP_KERNEL);
 					copy_fxregs_to_kernel(fib_ctx->fpu); // initializing the FPU of the fiber with the one of current
 
 					smp_mb();
 					fib_ctx->fiber_id = atomic_inc_return(&(tmp->fiber_ctr));
 					smp_mb();
-					
+
 					fib_ctx->thread = 0;	// a new fiber is free, no threads are running it
 					spin_lock_init(&fib_ctx->lock);
 
@@ -261,7 +261,7 @@ int create_fiber(struct fiber_arg_t* arg){
 					fib_ctx->last_execution = (((current->utime) + (current->stime)) / 1000000); // in ms
 
 					snprintf(fib_ctx->name, 10, "%d", fib_ctx->fiber_id);
-					
+
 					// adding the fiber to the hashtable of fibers of process
 					hash_add_rcu(tmp->fibers, &(fib_ctx->node), fib_ctx->fiber_id);
 					atomic_inc(&(tmp->active_fibers));  // incrementing the counter of fibers of the process
@@ -269,7 +269,7 @@ int create_fiber(struct fiber_arg_t* arg){
 					my_arg.ret = fib_ctx->fiber_id;
 
 					copy_to_user((struct fiber_arg*) arg, (const struct fiber_arg_t*) &my_arg, sizeof(struct fiber_arg_t));
-					
+
 					//printk(KERN_INFO "Fiber succesfully created! fiber_id = %u\n", fib_ctx->fiber_id);
 
 					return 0;
@@ -277,25 +277,25 @@ int create_fiber(struct fiber_arg_t* arg){
 			}
 		}
 	}
-	
+
 	// If I am here, the thread "current" did never call "convert_thread", so it cannot create fibers!
 	printk(KERN_INFO "create_fiber not allowed. Thread did never call convert_thread!\n");
 	return -1;
 }
 
 int switch_to(pid_t target_fib){
-	
+
 	struct process_t* tmp;
 	struct thread_t* tmp2;
 	struct fiber_context_t *tmp3, *old_fiber;
 	struct pt_regs* current_regs;
 	pid_t current_pid, current_tgid;	// pid and tgid of the thread that called convert_thread
-	
+
 	current_pid = current->pid;
 	current_tgid = current->tgid;
-	
+
 	current_regs = task_pt_regs(current);
-	
+
 	// going to check if the "current" thread called "convert_thread" at least once, otherwise it cannot do switch_to!
 	hash_for_each_possible_rcu(processes, tmp, node, current_tgid) {
 		if(tmp->process_id == current_tgid){
@@ -304,14 +304,14 @@ int switch_to(pid_t target_fib){
 			hash_for_each_possible_rcu(tmp->threads, tmp2, node, current_pid) {
 				if(tmp2->thread_id == current_pid){
 					// I found it! "current" already called convert_thread, so it is already a fiber.
-					
+
 					old_fiber = tmp2->selected_fiber;
-					
+
 					//Going to check if the target fiber exists within the fibers of the current process
 					hash_for_each_possible_rcu(tmp->fibers, tmp3, node, target_fib) {
 						if(tmp3->fiber_id == target_fib){
 							// The fiber I want to switch to exists! It is tmp3
-							
+
 							if(!spin_trylock(&tmp3->lock)){
 								tmp3->f_activations +=1;
 								printk(KERN_INFO "could not acquire lock of target fiber! Some other is trying to acquire it!");
@@ -329,13 +329,13 @@ int switch_to(pid_t target_fib){
 								printk(KERN_INFO "the target fiber is no longer available!\n");
 								return -1;
 							}
-							
+
 							// If i am here, I can steal the fiber
 							tmp3->thread = current_pid;
 							tmp3->activations +=1;
 							tmp2->selected_fiber = tmp3;
 							spin_unlock(&tmp3->lock);
-							
+
 							// saving the state of the current thread into the old fiber
 							memcpy(old_fiber->regs, current_regs, sizeof(struct pt_regs));
 							copy_fxregs_to_kernel(old_fiber->fpu); // saving the FPU into the old fiber
@@ -347,7 +347,7 @@ int switch_to(pid_t target_fib){
 							copy_kernel_to_fxregs(&(tmp3->fpu->state.fxsave));
 							tmp3->last_execution = (((current->utime) + (current->stime)) / 1000000);
 							return 0;
-						
+
 						}
 					}
 
@@ -358,10 +358,10 @@ int switch_to(pid_t target_fib){
 			}
 		}
 	}
-	
+
 	// If I am here, the thread "current" did never call "convert_thread", so it cannot switch_to!
 	printk(KERN_INFO "switch_to not allowed. Thread did never call convert_thread!\n");
-	return -1;			
+	return -1;
 }
 
 int fls_alloc(unsigned long* arg){
@@ -375,7 +375,7 @@ int fls_alloc(unsigned long* arg){
 	pid_t current_tgid;		// process id of the thread that called fls_alloc
 
 	unsigned long index;
-	
+
 	current_pid = current->pid;
 	current_tgid = current->tgid;
 
@@ -387,7 +387,7 @@ int fls_alloc(unsigned long* arg){
 			hash_for_each_possible_rcu(tmp->threads, tmp2, node, current_pid) {
 				if(tmp2->thread_id == current_pid){
 					// I found it! "current" already called convert_thread, so it is already a fiber.
-					
+
 					fib_ctx = tmp2->selected_fiber;
 					fib_fls = &(fib_ctx->fls);
 
@@ -428,7 +428,7 @@ int fls_free(unsigned long* arg){
 	pid_t current_tgid;		// process id of the thread that called fls_alloc
 
 	unsigned long index;
-	
+
 	current_pid = current->pid;
 	current_tgid = current->tgid;
 
@@ -477,7 +477,7 @@ int fls_get(struct fls_args_t* arg){
 	pid_t current_tgid;		// process id of the thread that called fls_alloc
 
 	struct fls_args_t fls_args;
-	
+
 	current_pid = current->pid;
 	current_tgid = current->tgid;
 
@@ -521,7 +521,7 @@ int fls_get(struct fls_args_t* arg){
 			}
 		}
 	}
-	return -1;			
+	return -1;
 
 }
 
@@ -535,7 +535,7 @@ int fls_set(struct fls_args_t* arg){
 	pid_t current_tgid;		// process id of the thread that called fls_alloc
 
 	struct fls_args_t fls_args;
-	
+
 	current_pid = current->pid;
 	current_tgid = current->tgid;
 
@@ -585,20 +585,20 @@ int fls_set(struct fls_args_t* arg){
 int doexit_entry_handler(struct kprobe* kp, struct pt_regs* regs){
 
 	int bkt;
-	
+
 	struct process_t* tmp;
 	struct thread_t* tmp2;
-	
+
 	struct fiber_context_t* tmp3;
-	
+
 	pid_t current_pid;		// thread id of the thread that called convert_thread
 	pid_t current_tgid;		// process id of the thread that called convert_thread
-	
+
 	struct pt_regs* current_regs;
-	
+
 	current_pid = current->pid;
 	current_tgid = current->tgid;
-	
+
 	current_regs = task_pt_regs(current);
 
 	// going to check if the "current" thread called "convert_thread" at least once.
@@ -606,7 +606,7 @@ int doexit_entry_handler(struct kprobe* kp, struct pt_regs* regs){
 		if(tmp->process_id == current_tgid){
 			// I found the entry in the hashtable corresponding to the process of current thread
 			// I have to check if there is the struct thread corresponding to the current thread in its "threads" hashtable
-			
+
 			if(atomic_read(&(tmp->active_threads))==1){
 				// The thread that just exited was the last one!
 				// destroying all fibers
@@ -623,16 +623,16 @@ int doexit_entry_handler(struct kprobe* kp, struct pt_regs* regs){
 					hash_del_rcu(&(tmp2->node));
 					kfree(tmp2);
 				}
-				
+
 				//destroying the process
 				hash_del_rcu(&(tmp->node));
 				kfree(tmp);
-				
-				return 0;		
+
+				return 0;
 			}
 			else{
 				// The thread that just exited wasn't the last one!
-				
+
 				// destroying the thread
 				hash_for_each_possible_rcu(tmp->threads, tmp2, node, current_pid){
 					if(tmp2->thread_id == current_pid){
@@ -649,7 +649,7 @@ int doexit_entry_handler(struct kprobe* kp, struct pt_regs* regs){
 				return 0;
 			}
 		}
-	}	
+	}
 	return 0;
 }
 
@@ -659,7 +659,7 @@ int kprobe_proc_readdir_handler(struct kretprobe_instance *p, struct pt_regs *re
 
 	// When "ls" is issued in /proc/PID or inside its subdirs, the proc_pident_readdir is called, we probed it and this is the entry_handler
     // Here we check if we are in any PID directory, if yes we check if the process has some fibers, if yes we instanziate the "fibers" directory
-    
+
 	struct file* file;
     struct pid_entry* ents;
     unsigned int nents;
@@ -681,7 +681,7 @@ int kprobe_proc_readdir_handler(struct kretprobe_instance *p, struct pt_regs *re
 	// check if it is a PID directory
     if(kstrtoul(file->f_path.dentry->d_name.name, 10, &folder_pid))
         return 0; // we're not in /proc/PID, nothing to do here
-	
+
 	// check if process has fibers
 	hash_for_each_possible_rcu(processes, tmp, node, folder_pid){
 		if(tmp->process_id==folder_pid){
@@ -864,13 +864,13 @@ ssize_t fibentry_read(struct file *file, char __user *buff, size_t count, loff_t
 
 	// getting the tgid of the process holding the target fiber
     if(kstrtoul(file->f_path.dentry->d_parent->d_parent->d_name.name, 10, &tgid))
-        return 0; 
+        return 0;
 
 	hash_for_each_possible_rcu(processes, process, node, tgid){
 		if(process->process_id == tgid){
 			hash_for_each_possible_rcu(process->fibers, fiber, node, fib_id){
 				if(fiber->fiber_id == fib_id){
-					
+
 					// fiber found, getting its status and writing it into buf
 					bytes_written = snprintf(buf, 512,
 											"Fiber status: %s\n"
