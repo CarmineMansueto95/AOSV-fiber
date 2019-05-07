@@ -108,7 +108,7 @@ long ioctl_commands(struct file* filp, unsigned int cmd, unsigned long arg){
 	return 0;
 }
 
-static struct kprobe my_kprobe = {
+static struct kprobe doexit_kprobe = {
 	.pre_handler = doexit_entry_handler,	// pre_handler: called before kernel calls do_exit
 	.symbol_name = "do_exit"
 };
@@ -195,7 +195,7 @@ static int __init mod_init(void){
 	spin_lock_init(&cnvtr_lock); // initializing the convert_thread() spinlock defined in "fiber_utils.c"
 
 	// Registering kprobe for do_exit()
-	ret = register_kprobe(&my_kprobe);
+	ret = register_kprobe(&doexit_kprobe);
 	if(ret){
 		printk(KERN_INFO "Could not register kprobe!\n");
 		return -EFAULT;
@@ -231,7 +231,7 @@ static void __exit mod_exit(void){
 	class_destroy(fib_cdevclass);
 	cdev_del(fib_cdev);
 	unregister_chrdev_region(fib_cdevt, NUM_MINORS);
-	unregister_kprobe(&my_kprobe);
+	unregister_kprobe(&doexit_kprobe);
 	unregister_kretprobe(&readdir_probe);
 	unregister_kretprobe(&lookup_probe);
 }
