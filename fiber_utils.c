@@ -145,7 +145,7 @@ int convert_thread(pid_t* arg){
 	fib_ctx->activations = 1;
 	fib_ctx->f_activations = 0;
 	fib_ctx->execution_time = 0;
-	fib_ctx->last_execution = (((current->utime) + (current->stime)) / 1000000); // in ms
+	fib_ctx->last_execution = (((current->utime) + (current->stime))) / 1000000; // in ms
 
 	if(process_f!=NULL){
 		// the process structure already exists, it is process_f
@@ -258,7 +258,7 @@ int create_fiber(struct fiber_arg_t* arg){
 					fib_ctx->activations = 0;
 					fib_ctx->f_activations = 0;
 					fib_ctx->execution_time = 0;
-					fib_ctx->last_execution = (((current->utime) + (current->stime)) / 1000000); // in ms
+					fib_ctx->last_execution = 0; // in ms
 
 					snprintf(fib_ctx->name, 10, "%d", fib_ctx->fiber_id);
 
@@ -290,11 +290,14 @@ int switch_to(pid_t target_fib){
 	struct fiber_context_t *tmp3, *old_fiber;
 	struct pt_regs* current_regs;
 	pid_t current_pid, current_tgid;	// pid and tgid of the thread that called convert_thread
+	unsigned long long utime_stime;
 
 	current_pid = current->pid;
 	current_tgid = current->tgid;
 
 	current_regs = task_pt_regs(current);
+
+	utime_stime = 0;
 
 	// going to check if the "current" thread called "convert_thread" at least once, otherwise it cannot do switch_to!
 	hash_for_each_possible_rcu(processes, tmp, node, current_tgid) {
@@ -310,21 +313,23 @@ int switch_to(pid_t target_fib){
 					//Going to check if the target fiber exists within the fibers of the current process
 					hash_for_each_possible_rcu(tmp->fibers, tmp3, node, target_fib) {
 						if(tmp3->fiber_id == target_fib){
-							// The fiber I want to switch to exists! It is tmp3
+							// the fiber I want to switch to exists! It is tmp3
 
 							if(!spin_trylock(&tmp3->lock)){
 								tmp3->f_activations +=1;
-								printk(KERN_INFO "could not acquire lock of target fiber! Some other is trying to acquire it!");
+								//printk(KERN_INFO "could not acquire lock of target fiber! Some other is trying to acquire it!");
 								return -1;
 							}
 							if(tmp3->thread > 0){
+								// the target fiber is occupied by another thread
 								tmp3->f_activations +=1;
 								spin_unlock(&tmp3->lock);
-								printk(KERN_INFO "the target fiber is occupied by another thread!\n thread:%d | fiber:%d \n", tmp3->thread, tmp3->fiber_id);
+								//printk(KERN_INFO "the target fiber is occupied by another thread!\n thread:%d | fiber:%d \n", tmp3->thread, tmp3->fiber_id);
 								return -1;
 							}
 
 							if(tmp3->thread < 0){
+								// the target fiber is no longer available (to be destroyed)
 								spin_unlock(&tmp3->lock);
 								printk(KERN_INFO "the target fiber is no longer available!\n");
 								return -1;
@@ -334,18 +339,22 @@ int switch_to(pid_t target_fib){
 							tmp3->thread = current_pid;
 							tmp3->activations +=1;
 							tmp2->selected_fiber = tmp3;
+							utime_stime = ((current->utime) + (current->stime)) / 1000000;
+							old_fiber->execution_time += utime_stime - old_fiber->last_execution;
+							tmp3->last_execution = utime_stime;
 							spin_unlock(&tmp3->lock);
+
+							//printk(KERN_INFO "Switching from FID %d to FID %d\n", old_fiber->fiber_id, tmp3->fiber_id);
 
 							// saving the state of the current thread into the old fiber
 							memcpy(old_fiber->regs, current_regs, sizeof(struct pt_regs));
 							copy_fxregs_to_kernel(old_fiber->fpu); // saving the FPU into the old fiber
-							old_fiber->execution_time += (((current->utime) + (current->stime)) / 1000000) - old_fiber->last_execution;
+							//printk(KERN_INFO "PID: %d | FID: %d | utime+stime: %llu | last_execution: %llu \n", current->pid, old_fiber->fiber_id, current->utime + current->stime, old_fiber->last_execution);
 							old_fiber->thread = 0;	// now the old fiber is free
 
 							// storing the state of the target fiber into the current thread
 							memcpy(current_regs, tmp3->regs, sizeof(struct pt_regs));
 							copy_kernel_to_fxregs(&(tmp3->fpu->state.fxsave));
-							tmp3->last_execution = (((current->utime) + (current->stime)) / 1000000);
 							return 0;
 
 						}
@@ -395,7 +404,7 @@ int fls_alloc(unsigned long* arg){
 						// First time fls_alloc on this fiber, I have to allocate the array
 						fib_fls->fls = kvzalloc(MAX_FLS_INDEX * sizeof(long long), GFP_KERNEL);
 						fib_fls->size = 0;
-						fib_fls->bitmask = kzalloc(BITS_TO_LONGS(MAX_FLS_INDEX) * sizeof(unsigned long), GFP_KERNEL);
+						fib_fls->bitmask = kzalloc(BITS_TO_LONGS(MAX_FLS_INDEX) * sizeof(unsigned long), GFP_KERNEL); // BITS_TO_LONGS tells me how many longs are needed to represent n bits
 					}
 
 					index = find_first_zero_bit(fib_fls->bitmask, MAX_FLS_INDEX);
@@ -632,13 +641,13 @@ int doexit_entry_handler(struct kprobe* kp, struct pt_regs* regs){
 			}
 			else{
 				// The thread that just exited wasn't the last one!
+				// I just remove the thread, but if it was running a fiber I mark it as "unavailable"
 
 				// destroying the thread
 				hash_for_each_possible_rcu(tmp->threads, tmp2, node, current_pid){
 					if(tmp2->thread_id == current_pid){
 						if(tmp2->selected_fiber!=NULL){
-							// if I am here, the thread that is dying was executing a fiber, the fiber has to be marked unavailable
-							tmp2->selected_fiber->thread=-1;
+							tmp2->selected_fiber->thread=-1;	// marking the fiber as "unavailable"
 							atomic_dec(&(tmp->active_fibers));  // decrementing the counter of fibers of the process
 						}
 					}

@@ -97,6 +97,8 @@ static void main_loop(void *args) {
 	// Notify other fibers that I'm done and reduce the total time
 	__sync_fetch_and_add(&exec_millis, millis);
 	__sync_fetch_and_sub(&completed_fibers, 1);
+
+	//printf("Fibers left: %u\n", completed_fibers);
 	
 	if(id != 1) {
 		while(true) {

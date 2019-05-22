@@ -45,9 +45,9 @@ void* CreateFiber(ssize_t stack_size, void* (*routine)(void*), void* args){
 	
 	void* stack = memalign(16,stack_size); // the stack must be 16 byte aligned
 	/*
-     * ioctl descreases the user stack pointer of 8 bytes before returning
-     * since the user stack pointer must point to an address that is 16-byte alligned it is required it points exactly to the end of the alligned buffer pre-allocated
-     * this is why 8 bytes are added
+	 * According to the SystemV ABI when a function is called, it's RSP has to be such that RSP+8 is 16 byte aligned
+	 * I align "stack" at 16 bytes, then I do RSP=stack+8, s.t. RSP+8 is then 16 byte aligned.
+	 * More details here -> "https://stackoverflow.com/questions/26866723/main-and-stack-alignment"
     */
 	my_arg.stack = stack+stack_size+8;
 	
@@ -78,8 +78,8 @@ void SwitchToFiber(void* fiber){
 	
 	ret = ioctl(fd, IOCTL_SWITCH_TO, f_id);
 	
-	if(ret)
-		printf("SwitchTo failed!!!\n");
+	//if(ret)
+		//printf("SwitchTo failed!!!\n");
 	
 	close(fd);
 }
