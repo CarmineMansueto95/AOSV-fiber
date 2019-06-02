@@ -344,8 +344,6 @@ int switch_to(pid_t target_fib){
 							tmp3->last_execution = utime_stime;
 							spin_unlock(&tmp3->lock);
 
-							//printk(KERN_INFO "Switching from FID %d to FID %d\n", old_fiber->fiber_id, tmp3->fiber_id);
-
 							// saving the state of the current thread into the old fiber
 							memcpy(old_fiber->regs, current_regs, sizeof(struct pt_regs));
 							copy_fxregs_to_kernel(old_fiber->fpu); // saving the FPU into the old fiber
